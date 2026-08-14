@@ -2,7 +2,7 @@
 
 ## 致谢 / Acknowledgements
 
-本项目能够完成，离不开前人对 BJUT 校园网认证流程的公开整理与实现。特别感谢以下项目及其作者：
+本项目能够完成，特别感谢以下项目及其作者：
 
 - **[key-zhzr/BJUT-Auto-Login](https://github.com/key-zhzr/BJUT-Auto-Login)**：本项目对 2026 年现行 BJUT Portal 的端点、请求参数、Type 3 加密认证流程，以及校园固定地址兼容策略的实现主要参考该项目。原项目采用 MIT License。
 - **[sw1128/bjut_auth_linux](https://github.com/sw1128/bjut_auth_linux)**：较早的 BJUT Linux 校园网一键认证实现，为本项目理解旧版 Linux 无界面认证流程、Type 1 / Type 2 兼容方式提供了重要参考。
