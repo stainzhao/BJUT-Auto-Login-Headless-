@@ -2,9 +2,10 @@
 Description=Check BJUT campus network login periodically
 
 [Timer]
-OnBootSec=15s
+OnBootSec=20s
 OnUnitActiveSec=60s
 AccuracySec=10s
+RandomizedDelaySec=5s
 Persistent=true
 Unit=bjut-auto-login.service
 
