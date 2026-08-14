@@ -1,0 +1,33 @@
+name: one-shot-ensure-recovery-run
+
+on: [push]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Apply patch
+        run: python3 .github/ensure_patch.py
+
+      - name: Validate
+        run: |
+          python3 -m py_compile bjut_auth.py
+          python3 -m unittest discover -s tests -v
+          bash -n install.sh uninstall.sh
+
+      - name: Commit final patch and remove one-shot files
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add bjut_auth.py tests/test_ensure_recovery.py README.md
+          git rm .github/ensure_patch.py .github/workflows/ensure-recovery-run.yml .github/workflows/ensure-recovery-fix.yml
+          git commit -m "Fix ensure false failures after portal errors"
+          git push origin HEAD:main
