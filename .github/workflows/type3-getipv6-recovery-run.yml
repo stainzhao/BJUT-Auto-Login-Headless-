@@ -1,0 +1,54 @@
+name: one-shot-type3-getipv6-recovery-run
+
+on:
+  push:
+    paths:
+      - .github/workflows/type3-getipv6-recovery-run.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Apply corrected patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import re
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/type3-getipv6-recovery-fix.yml').read_text(encoding='utf-8')
+          match = re.search(r"echo '([A-Za-z0-9+/=]+)' \| base64 -d", workflow)
+          if not match:
+              raise SystemExit('embedded patch payload not found')
+          script = base64.b64decode(match.group(1)).decode('utf-8')
+          old = 'text, count = pattern.subn(replacement, text, count=1)'
+          new = 'text, count = pattern.subn(lambda _match: replacement, text, count=1)'
+          if old not in script:
+              raise SystemExit('expected subn line not found')
+          script = script.replace(old, new, 1)
+          Path('/tmp/apply_type3_fix.py').write_text(script, encoding='utf-8')
+          PY
+          python3 /tmp/apply_type3_fix.py
+
+      - name: Validate patch
+        run: |
+          python3 -m py_compile bjut_auth.py
+          python3 -m unittest discover -s tests -v
+          bash -n install.sh uninstall.sh
+
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add bjut_auth.py tests/test_type3_getipv6_recovery.py README.md
+          git commit -m "Fix Type 3 IPv6 discovery recovery"
+          git push origin HEAD:main
