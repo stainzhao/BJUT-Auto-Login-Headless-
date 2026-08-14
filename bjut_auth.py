@@ -242,7 +242,10 @@ def _probe_candidate_interfaces(candidates, allow_http_fallback):
     detected = []
     for interface in candidates:
         try:
-            detect_login_type(interface, allow_http_fallback, probe_timeout=2, retries=0)
+            detect_login_type(
+                interface, allow_http_fallback, probe_timeout=2, retries=0,
+                require_login_ready=False,
+            )
         except AuthError:
             continue
         detected.append(interface)
@@ -480,7 +483,7 @@ def eportal_encrypt(value):
     return "".join(f"{unit ^ EPORTAL_XOR_KEY:02x}" for unit in units)
 
 
-def get_observed_ipv6(interface, timeout=6, retries=1):
+def get_observed_ipv6(interface, timeout=6, retries=1, allow_portal_only=False):
     query = urlencode([
         ("callback", "dr1004"),
         ("program_index", LGN_PROGRAM_INDEX),
@@ -495,17 +498,23 @@ def get_observed_ipv6(interface, timeout=6, retries=1):
     )
     data = jsonp_object(body)
     try:
-        result = int(data.get("result", 0))
-    except (TypeError, ValueError):
-        result = 0
+        result = int(data.get("result"))
+    except (TypeError, ValueError) as exc:
+        raise AuthError("IPv6 地址发现接口未返回有效 result 字段") from exc
     if result != 1:
+        if allow_portal_only:
+            return ""
         raise AuthError("IPv6 地址发现接口未返回成功结果")
     value = str(data.get("ip", "")).strip()
     try:
         address = ipaddress.ip_address(value)
     except ValueError as exc:
+        if allow_portal_only:
+            return ""
         raise AuthError("IPv6 地址发现接口返回了无效地址") from exc
     if address.version != 6:
+        if allow_portal_only:
+            return ""
         raise AuthError("IPv6 地址发现接口没有返回 IPv6")
     return str(address)
 
@@ -601,9 +610,18 @@ def probe_body_matches(login_type, body):
         return False
 
 
-def detect_login_type(interface, allow_http_fallback, probe_timeout=3, retries=1):
+def detect_login_type(
+    interface, allow_http_fallback, probe_timeout=3, retries=1,
+    require_login_ready=True,
+):
     if not interface_is_wireless(interface):
-        get_observed_ipv6(interface, timeout=probe_timeout, retries=retries)
+        if require_login_ready:
+            get_observed_ipv6(interface, timeout=probe_timeout, retries=retries)
+        else:
+            get_observed_ipv6(
+                interface, timeout=probe_timeout, retries=retries,
+                allow_portal_only=True,
+            )
         return "3"
 
     probes = [
@@ -853,12 +871,15 @@ def do_doctor(args, config, config_path):
         print(
             f"ipv4: {interface_ipv4(interface, None if wireless else TYPE3_ROUTE_DEST)}"
         )
-        print(
-            "internet: "
-            + ("online" if internet_online(interface, connectivity_url(config)) else "offline")
-        )
+        online = internet_online(interface, connectivity_url(config))
+        print("internet: " + ("online" if online else "offline"))
         try:
-            print(f"portal: type {detect_login_type(interface, allow_http)}")
+            print(
+                "portal: type "
+                + detect_login_type(
+                    interface, allow_http, require_login_ready=not online
+                )
+            )
         except AuthError as exc:
             print(f"portal: ERROR ({exc})")
             failures += 1
@@ -915,7 +936,9 @@ def main():
         if args.command == "detect":
             login_type = args.login_type or login_type_value(config)
             if login_type == "auto":
-                login_type = detect_login_type(interface, allow_http)
+                login_type = detect_login_type(
+                    interface, allow_http, require_login_ready=False
+                )
             print(f"type={login_type} interface={interface}")
             return 0
 
