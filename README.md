@@ -1,5 +1,18 @@
 # BJUT Auto Login (Headless)
 
+## 致谢 / Acknowledgements
+
+本项目能够完成，离不开前人对 BJUT 校园网认证流程的公开整理与实现。特别感谢以下项目及其作者：
+
+- **[key-zhzr/BJUT-Auto-Login](https://github.com/key-zhzr/BJUT-Auto-Login)**：本项目对 2026 年现行 BJUT Portal 的端点、请求参数、Type 3 加密认证流程，以及校园固定地址兼容策略的实现主要参考该项目。原项目采用 MIT License。
+- **[sw1128/bjut_auth_linux](https://github.com/sw1128/bjut_auth_linux)**：较早的 BJUT Linux 校园网一键认证实现，为本项目理解旧版 Linux 无界面认证流程、Type 1 / Type 2 兼容方式提供了重要参考。
+
+感谢上述作者将相关研究和实现公开分享，使本项目能够在此基础上进一步面向 **Headless Linux / systemd / 多网口服务器 / 无人值守自动恢复** 场景进行独立整理、实现和完善。
+
+> 本项目不是上述项目的官方版本或附属项目。第三方许可与归属说明见 [`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES)。
+
+---
+
 北京工业大学校园网无 UI 自动认证工具，面向 Linux 服务器、工作站、NAS 和其他无桌面环境。
 
 项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
@@ -329,6 +342,14 @@ Finished bjut-auto-login.service.
 
 ```text
 type=3 interface=enp7s0: Portal协议认证成功！
+```
+
+部分 Portal 节点可能已经完成认证，却在响应阶段返回 HTTP 5xx。`ensure` 会短暂复核最终公网状态；如果公网已经恢复，会保留 warning 但仍让 systemd 正常成功退出：
+
+```text
+warning: Portal 认证过程异常（HTTP 500...），但公网已恢复，视为认证成功
+bjut-auto-login.service: Deactivated successfully.
+Finished bjut-auto-login.service.
 ```
 
 ---
@@ -727,7 +748,7 @@ ip link set enp7s0 down
 - HTTP fallback 默认关闭。
 - Portal 请求不读取系统 HTTP/HTTPS proxy。
 - Portal 请求绑定选定接口。
-- Portal HTTP 请求强制使用 IPv4 传输，避免接口选择被 AAAA / IPv6 路由干扰。
+- 除 Type 3 `getipv6` 的正常发现请求保留系统原生地址族外，其余 Portal 请求优先使用 IPv4，减少 AAAA / IPv6 路由对物理接口选择的干扰。
 - 固定地址回退仅允许内置 BJUT Portal 白名单，并继续使用原 HTTPS 主机名/SNI。
 - 含凭据的完整 URL 通过 `curl --config -` 从 stdin 传给 curl，不出现在 curl argv。
 - curl 错误信息会脱敏。
@@ -809,18 +830,16 @@ GitHub Actions 会在多个 Python 版本上执行测试。
 
 ---
 
-# 19. 致谢与许可
+# 19. 许可与第三方说明
 
-当前 BJUT Portal 端点、参数和认证流程参考：
+项目致谢和主要参考来源已置于 README 最前方。
 
-- `key-zhzr/BJUT-Auto-Login`
-
-本项目也参考该项目公开的校园网络信息来设计多网口和 Portal 固定地址 fallback 判断。
-
-原项目采用 MIT License。相关许可见：
+`key-zhzr/BJUT-Auto-Login` 采用 MIT License；其相关许可与归属声明保留在：
 
 ```text
 THIRD_PARTY_NOTICES
 ```
 
-本项目同样采用 MIT License。
+`sw1128/bjut_auth_linux` 作为早期 BJUT Linux 认证实现参考。本项目未将其声明为代码来源或许可来源。
+
+本项目同样采用 MIT License，具体以仓库中的 `LICENSE` 为准。
