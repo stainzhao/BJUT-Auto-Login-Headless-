@@ -1,36 +1,49 @@
 # BJUT Auto Login (Headless)
 
-北京工业大学校园网无 UI 自动认证工具，适用于 Linux 服务器、工作站、NAS 和其他无桌面环境。
+北京工业大学校园网无 UI 自动认证工具，面向 Linux 服务器、工作站、NAS 和其他无桌面环境。
 
-本项目将现行 BJUT Portal 登录流程实现为轻量 CLI，不依赖 Tauri/Rust GUI。认证请求会绑定到校园网物理网卡，尽量避免 WireGuard、Tailscale、TUN/TAP、Docker 等虚拟网络抢走认证流量。
+项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
 
-> 当前版本：`0.2.0`
+当前版本：`0.3.0`
+
+> Type 3（BJUT 有线 `lgn`）已经在真实服务器环境完成“认证失效 → systemd timer 检测离线 → 自动重新认证 → `status=online`”闭环验证。
 >
-> 已在 BJUT 有线 Type 3 环境完成真实验证：认证失效后，systemd timer 检测到离线并自动重新认证，随后公网连接恢复。
+> Type 1 / Type 2 已按 2026 年现行 Portal 实现对齐，但仍建议在对应网络环境首次部署时执行一次人工验证。
 
-## 支持功能
+---
 
-- **Type 1**：宿舍网 `10.21.221.98` ePortal
-- **Type 2**：`bjut_wifi` / `wlgn.bjut.edu.cn`
-- **Type 3**：有线 `lgn.bjut.edu.cn` 新版加密 ePortal
-- **auto**：自动检测认证类型
-- 自动识别物理网卡
-- `curl --interface` 绑定认证请求到物理接口
-- 拒绝明显的 `wg*`、`tun*`、`tailscale*`、`docker*` 等虚拟接口
-- `doctor` 环境和 Portal 自检
-- `status` 公网状态检查
-- `ensure`：在线跳过，离线自动登录
+## 功能
+
+- Type 1：宿舍网 `10.21.221.98` ePortal
+- Type 2：`bjut_wifi` / `wlgn.bjut.edu.cn`
+- Type 3：有线 `lgn.bjut.edu.cn` 新版加密 ePortal
+- `auto` 自动判断认证类型
+- 自动识别校园网物理接口
+- 支持双网口 / 多网口服务器
+- default route 暂时消失时仍可继续识别候选校园接口
+- 认证请求通过 `curl --interface` 绑定到选定接口
+- 排除明显的 WireGuard / TUN / Tailscale / Docker 等虚拟接口
+- Type 3 登录参数按现行 Portal 算法加密
+- Portal 瞬时 `HTTP 500/502/503/504` 等错误进行有限重试
+- `doctor` 部署前自检
+- `status` 公网状态检测
+- `ensure`：在线跳过，离线登录
 - systemd timer 周期巡检和掉线恢复
+- 配置文件安全检查
 - GitHub Actions 单元测试
 
-## 依赖
+项目本身**不写独立日志文件**。systemd 部署时，stdout/stderr 由 `journald` 接管。
+
+---
+
+# 1. 依赖
 
 ```text
 Linux
 Python >= 3.8
 curl
 iproute2
-systemd   # 仅自动重连需要
+systemd     # 仅自动重连需要
 ```
 
 Ubuntu / Debian：
@@ -42,22 +55,21 @@ sudo apt install -y python3 curl iproute2
 
 ---
 
-# 人工快速部署
-
-## 1. 克隆
+# 2. 快速部署
 
 ```bash
 git clone https://github.com/stainzhao/BJUT-Auto-Login-Headless-.git
 cd BJUT-Auto-Login-Headless-
-```
-
-## 2. 安装
-
-```bash
 sudo ./install.sh
 ```
 
-安装后主要文件：
+如果当前系统不是 systemd，只安装 CLI：
+
+```bash
+sudo ./install.sh --no-systemd
+```
+
+安装后：
 
 ```text
 /usr/local/bin/bjut-auth
@@ -66,9 +78,13 @@ sudo ./install.sh
 /etc/systemd/system/bjut-auto-login.timer
 ```
 
-`install.sh` 可重复运行用于升级；如果 `/etc/bjut-auto-login.conf` 已存在，不会主动覆盖已有账号配置。
+`install.sh` 可重复执行用于升级。已有 `/etc/bjut-auto-login.conf` 不会被覆盖。
 
-## 3. 配置账号
+---
+
+# 3. 配置
+
+编辑：
 
 ```bash
 sudo nano /etc/bjut-auto-login.conf
@@ -82,21 +98,21 @@ username = 25000000
 password = change_me
 
 # auto / 1 / 2 / 3
-# 推荐保持 auto
 type = auto
 
-# 留空时自动寻找物理网卡
-# 也可以显式填写 eno1 / enp7s0 / wlan0 等
+# 推荐先留空，让程序自动判断。
+# 双网口环境若仍无法唯一判断，可显式写 enp7s0 / eno1 / wlan0 等。
 interface =
 
-# 默认 false
-# 只有明确需要且确认当前校园网可信时才开启
+# 默认关闭。
+# 只有 Type 1 / Type 2 HTTPS 无法使用且确认校园网可信时才开启。
 allow_http_fallback = false
 
+# 用于确认是否真正访问公网。
 connectivity_url = https://www.baidu.com/
 ```
 
-设置权限：
+配置权限必须收紧：
 
 ```bash
 sudo chown root:root /etc/bjut-auto-login.conf
@@ -105,69 +121,141 @@ sudo chmod 600 /etc/bjut-auto-login.conf
 
 不要把真实账号密码提交到 Git。
 
-## 4. 自检
+## 配置校验
+
+程序会主动拒绝：
+
+- 不存在的显式 `--config`
+- 未知配置字段
+- `type` 非 `auto/1/2/3`
+- 拼错的布尔值，例如 `flase`
+- 非 `http/https` 的 `connectivity_url`
+- 带用户名或密码的 `connectivity_url`
+- 示例密码 `change_me`
+- 明显的虚拟接口
+
+密码中的 `%` 会按字面量处理，不会被 `ConfigParser` 插值。
+
+---
+
+# 4. 自动选网卡逻辑
+
+单网口机器通常无需配置 `interface`。
+
+多网口服务器按以下信息综合判断：
+
+1. 如果用户显式设置 `--interface` 或配置 `interface = ...`，始终优先。
+2. 如果只有一个具有可用 IPv4 的非虚拟接口，直接使用。
+3. 检查到 BJUT Portal 地址的实际路由及其源 IPv4。
+4. default route 暂时消失时，使用现行 BJUT 校园 IPv4 地址族作为保守 fallback。
+5. 多个候选仍无法区分时，对候选接口执行无凭据 Portal 探测。
+6. 仍然歧义时**安全报错**，而不是随机选网卡。
+
+这主要解决以下情况：
+
+```text
+enp7s0 -> BJUT 校园网
+enp8s0 -> 管理网 / 内网 / 第二条外网
+wg0    -> WireGuard
+tailscale0 -> Tailscale
+```
+
+以及认证失效后主路由暂时消失的情况。
+
+如果你已经明确知道校园网口，固定接口最确定：
+
+```ini
+interface = enp7s0
+```
+
+---
+
+# 5. 部署前自检
+
+运行：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 ```
 
-正常示例：
+正常输出类似：
 
 ```text
-BJUT Auto Login 0.2.0
+BJUT Auto Login 0.3.0
 python: 3.12.3
 curl: OK (/usr/bin/curl)
 ip: OK (/usr/sbin/ip)
 config: /etc/bjut-auto-login.conf
+config-security: OK
+credentials: configured (config)
+interfaces: enp7s0=172.19.26.49
 interface: enp7s0 (wired)
-ipv4: 172.x.x.x
+ipv4: 172.19.26.49
 internet: online
 portal: type 3
 ```
 
-重点确认：
+注意：
 
-```text
-curl: OK
-ip: OK
-interface: <物理接口>
-ipv4: <校园网 IPv4>
-portal: type 1 / 2 / 3
+- `internet: offline` 在尚未认证时**可以是正常的**。
+- `portal: ERROR (...)` 会让 `doctor` 返回非零退出码。
+- 凭据缺失或仍为示例值也会让 `doctor` 失败。
+- 配置权限过宽会被视为部署问题。
+
+检查退出码：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
+echo $?
 ```
 
-`internet` 在未认证时可以是 `offline`，这本身不代表程序异常。
+成功应为：
 
-## 5. 验证认证
+```text
+0
+```
+
+---
+
+# 6. 首次认证验证
+
+运行：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
 ```
 
-已经在线时：
+如果已经在线：
 
 ```text
 online: interface=enp7s0, skip login
 ```
 
-未认证时，成功结果类似：
+如果当前未认证，成功时类似：
 
 ```text
 type=3 interface=enp7s0: Portal协议认证成功！
 ```
 
-然后执行：
+然后：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf status
 ```
 
-成功应输出：
+成功：
 
 ```text
 online
 ```
 
-## 6. 启用自动重连
+`ensure` 即使当前在线，也会先确认已经配置有效凭据，避免“部署时在线，但真正掉线后才发现密码仍是 `change_me`”这种假成功。
+
+---
+
+# 7. 启用自动重连
+
+只有 `doctor` 和 `ensure` 验证通过后再启用：
 
 ```bash
 sudo systemctl enable --now bjut-auto-login.timer
@@ -176,48 +264,235 @@ sudo systemctl enable --now bjut-auto-login.timer
 检查：
 
 ```bash
+systemctl is-enabled bjut-auto-login.timer
+systemctl is-active bjut-auto-login.timer
+```
+
+期望：
+
+```text
+enabled
+active
+```
+
+查看详细状态：
+
+```bash
+systemctl status bjut-auto-login.timer --no-pager
+```
+
+正常：
+
+```text
+Active: active (waiting)
+```
+
+默认约每 60 秒检查一次。
+
+---
+
+# 8. systemd 状态说明
+
+`bjut-auto-login.service` 是：
+
+```ini
+Type=oneshot
+```
+
+因此执行完后：
+
+```text
+Active: inactive (dead)
+```
+
+**是正常状态。**
+
+正确判断是否启用自动认证，应看 timer：
+
+```bash
 systemctl status bjut-auto-login.timer
 ```
 
-正常状态包含：
+在线时典型日志：
 
 ```text
-Loaded: loaded (...; enabled; ...)
-Active: active (waiting)
-Triggers: bjut-auto-login.service
+Starting bjut-auto-login.service...
+online: interface=enp7s0, skip login
+bjut-auto-login.service: Deactivated successfully.
+Finished bjut-auto-login.service.
 ```
 
-查看日志：
+真实掉认证后成功恢复时：
+
+```text
+type=3 interface=enp7s0: Portal协议认证成功！
+```
+
+---
+
+# 9. 日志
+
+查看最近日志：
 
 ```bash
 journalctl -u bjut-auto-login.service -n 50 --no-pager
 ```
 
-实时日志：
+实时查看：
 
 ```bash
 journalctl -fu bjut-auto-login.service
 ```
 
+查看 journal 总磁盘占用：
+
+```bash
+journalctl --disk-usage
+```
+
+本项目没有自己的日志文件，也不会创建持续增长的 `.log` 文件。
+
 ---
 
-# AI Agent / Codex 自动部署协议
+# 10. 瞬时网络错误
 
-本节用于让 Agent 在新 Linux 主机上自动部署本项目。
+服务器开机、DHCP 更新、IPv6 尚未完全就绪或 Portal 短时异常时，可能遇到：
 
-如果你是负责部署本项目的 Agent，**严格按以下顺序执行，不要自行猜测网卡、IP、Portal 类型，也不要为了测试而主动切断远程服务器网络。**
+```text
+HTTP 500
+HTTP 502
+HTTP 503
+HTTP 504
+```
 
-## Agent 前置条件
+当前版本对典型瞬时 HTTP 状态和连接失败做**有限重试**，不会无限循环。
 
-部署前确认：
+如果本轮仍失败，systemd timer 会在下一轮继续检查。
 
-1. 主机是 Linux。
-2. 有 root 或 `sudo` 权限。
-3. 用户已经明确提供 BJUT 用户名和密码，或凭据已安全存在目标机。
-4. 不得把真实密码写入 Git、PR、Issue、日志或最终汇报。
-5. 如果 SSH/远程桌面依赖当前校园网连接，不得执行 `ip link set ... down`、修改 MAC、删除路由等可能中断远程访问的测试。
+永久配置错误不会被无限掩盖，例如：
 
-## Step A：获取代码
+```text
+配置文件不存在
+密码仍是 change_me
+存在多个无法区分的候选网卡
+Portal 无法确认
+认证网关明确拒绝账号密码
+```
+
+---
+
+# 11. 常用命令
+
+版本：
+
+```bash
+bjut-auth --version
+```
+
+诊断：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
+```
+
+检测 Portal：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf detect
+```
+
+公网状态：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf status
+```
+
+主动登录：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf login
+```
+
+自动逻辑：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
+```
+
+固定接口：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf --interface enp7s0 doctor
+```
+
+固定 Type 3：
+
+```bash
+sudo bjut-auth --config /etc/bjut-auto-login.conf --type 3 login
+```
+
+---
+
+# 12. 更新
+
+```bash
+cd BJUT-Auto-Login-Headless-
+git pull --ff-only
+sudo ./install.sh
+```
+
+如果本地目录仍叫旧名称，例如：
+
+```text
+~/auto_login
+```
+
+目录名不影响：
+
+```bash
+cd ~/auto_login
+git pull --ff-only
+sudo ./install.sh
+```
+
+已经运行的 timer 会在安装后重新加载新的 unit 定义。
+
+---
+
+# 13. 卸载
+
+保留账号配置：
+
+```bash
+sudo ./uninstall.sh
+```
+
+连配置一起删除：
+
+```bash
+sudo ./uninstall.sh --purge
+```
+
+非 systemd 环境也可以正常卸载。
+
+---
+
+# 14. AI Agent / Codex 自动部署协议
+
+如果 Agent 负责在新服务器部署本项目，按以下顺序执行。
+
+## A. 前置条件
+
+Agent 必须确认：
+
+- Linux
+- root / sudo 可用
+- 用户已提供 BJUT 凭据，或凭据已安全存在目标机
+- 不把密码写进 Git / PR / Issue / 最终汇报
+- 不通过 `-p/--password` 长期保存密码
+- 如果当前 SSH 依赖校园网，不主动执行断网、改 MAC、删路由等危险测试
+
+## B. 获取代码
 
 新部署：
 
@@ -229,80 +504,34 @@ cd BJUT-Auto-Login-Headless-
 已有部署：
 
 ```bash
-cd BJUT-Auto-Login-Headless-
 git pull --ff-only
 ```
 
-如果本地目录仍叫旧名称，例如 `auto_login`，目录名不影响程序运行：
+## C. 安装
 
-```bash
-cd auto_login
-git pull --ff-only
-```
-
-## Step B：检查并安装依赖
-
-```bash
-command -v python3
-command -v curl
-command -v ip
-```
-
-Ubuntu / Debian 缺少依赖时：
-
-```bash
-sudo apt update
-sudo apt install -y python3 curl iproute2
-```
-
-## Step C：安装
+systemd Linux：
 
 ```bash
 sudo ./install.sh
 ```
 
-如果旧 checkout 丢失可执行位：
+非 systemd：
 
 ```bash
-chmod +x install.sh
-sudo ./install.sh
+sudo ./install.sh --no-systemd
 ```
 
-或者：
+## D. 写入配置
 
-```bash
-sudo bash install.sh
-```
-
-Agent 不应修改安装路径；默认使用：
+目标：
 
 ```text
-/usr/local/bin/bjut-auth
 /etc/bjut-auto-login.conf
+owner: root:root
+mode: 600
 ```
 
-## Step D：写入配置
-
-目标配置格式：
-
-```ini
-[BJUT]
-username = <USERNAME>
-password = <PASSWORD>
-type = auto
-interface =
-allow_http_fallback = false
-connectivity_url = https://www.baidu.com/
-```
-
-写入后必须执行：
-
-```bash
-sudo chown root:root /etc/bjut-auto-login.conf
-sudo chmod 600 /etc/bjut-auto-login.conf
-```
-
-除非用户明确要求，否则 Agent 应保持：
+默认保持：
 
 ```ini
 type = auto
@@ -310,154 +539,101 @@ interface =
 allow_http_fallback = false
 ```
 
-**不要仅根据接口名字猜测 Type 1/2/3。** 使用 `doctor` 或 `detect` 获取实际结果。
+Agent 不应仅根据接口名猜 `type`。
 
-不要通过 `-p/--password` 传无人值守密码，因为命令行参数可能被本机其他用户看到。systemd 部署应使用权限为 `600` 的配置文件。
+如果自动判断唯一失败，Agent 可以根据 `doctor`、`ip -4 addr` 和 `ip -4 route get 172.30.201.2` 的结果确定校园接口，再写入 `interface = ...`。
 
-## Step E：运行 doctor
+## E. doctor
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 ```
 
-Agent 应读取并记录以下非敏感结果：
+Agent 只记录非敏感结果：
 
 ```text
-Python 版本
-curl 状态
-ip 状态
-config 路径
-interface
+version
+Python
+curl/ip
+config security
+credentials configured / error
+candidate interfaces
+selected interface
 IPv4
-internet 状态
+internet
 portal type
 ```
 
-如 `doctor` 无法识别物理网卡、没有 IPv4、无法确定 Portal，停止部署并报告错误，不要继续猜测配置。
+必须检查退出码。
 
-## Step F：执行 ensure
+## F. ensure
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
 ```
 
-以下两种结果均可接受。
-
-主机已经在线：
-
-```text
-online: interface=<iface>, skip login
-```
-
-主机未认证且登录成功：
-
-```text
-type=<1|2|3> interface=<iface>: ...认证成功...
-```
-
-然后必须执行：
+然后：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf status
 ```
 
-验收要求：
+必须得到：
 
 ```text
 online
 ```
 
-且退出码为 `0`。
+## G. timer
 
-## Step G：启用 timer
-
-只有 `ensure` 和 `status` 验证成功后才执行：
+仅 systemd：
 
 ```bash
 sudo systemctl enable --now bjut-auto-login.timer
-```
-
-验收：
-
-```bash
 systemctl is-enabled bjut-auto-login.timer
 systemctl is-active bjut-auto-login.timer
 ```
 
-期望输出：
+必须得到：
 
 ```text
 enabled
 active
 ```
 
-进一步检查：
+## H. 最终验收
 
-```bash
-systemctl status bjut-auto-login.timer --no-pager
-```
-
-应包含：
-
-```text
-Active: active (waiting)
-```
-
-## Step H：确认 timer 实际执行
-
-```bash
-journalctl -u bjut-auto-login.service -n 30 --no-pager
-```
-
-在线情况下通常看到：
-
-```text
-online: interface=<iface>, skip login
-```
-
-如果之后真实发生掉认证并成功恢复，会看到类似：
-
-```text
-type=3 interface=<iface>: Portal协议认证成功！
-```
-
-再执行：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf status
-```
-
-应返回：
-
-```text
-online
-```
-
-## Agent 部署完成判据
-
-只有以下条件全部满足，Agent 才应报告 **部署成功**：
+只有以下条件全部满足，Agent 才能报告部署成功：
 
 ```text
 [ ] /usr/local/bin/bjut-auth 存在
 [ ] /etc/bjut-auto-login.conf 存在
-[ ] 配置文件权限为 600
-[ ] doctor 成功识别物理网卡
-[ ] doctor 成功识别 Portal 类型
-[ ] ensure 成功
-[ ] status 返回 online
-[ ] bjut-auto-login.timer = enabled
-[ ] bjut-auto-login.timer = active
+[ ] 配置权限为 600
+[ ] doctor 退出码 = 0
+[ ] credentials = configured
+[ ] 已唯一确定校园网接口
+[ ] 已识别 Portal 类型
+[ ] ensure 退出码 = 0
+[ ] status = online
+[ ] timer = enabled        # systemd 部署
+[ ] timer = active         # systemd 部署
 ```
 
-如果当前主机本来就在线，Agent 可以确认自动巡检链路已经部署，但**不能声称已经完成“真实掉认证后自动恢复验证”**，除非 systemd 日志中确实出现过一次认证成功记录。
+如果部署时机器本来就在线，只能说明“自动巡检链路已部署”。
 
-## Agent 最终汇报建议格式
+只有日志确实出现过：
 
-部署成功后只汇报非敏感信息，例如：
+```text
+type=<...> interface=<...>: ...认证成功...
+```
+
+并随后 `status=online`，才能声称已经完成真实掉认证恢复验证。
+
+Agent 最终汇报示例：
 
 ```text
 BJUT Auto Login 部署完成
-- version: 0.2.0
+- version: 0.3.0
 - interface: enp7s0
 - IPv4: 172.x.x.x
 - portal: type 3
@@ -466,288 +642,114 @@ BJUT Auto Login 部署完成
 - last ensure: success
 ```
 
-不要输出：
+严禁输出：
 
 ```text
 password
-完整认证 URL 中的凭据
 Cookie
 Token
+完整认证请求 URL
 ```
 
 ---
 
-# 命令参考
+# 15. 双网口故障排查
 
-环境诊断：
+查看所有 IPv4：
+
+```bash
+ip -4 -o addr show scope global
+```
+
+查看到 Type 3 Portal 的实际路由：
+
+```bash
+ip -4 route get 172.30.201.2
+```
+
+例如：
+
+```text
+172.30.201.2 via ... dev enp7s0 src 172.19.26.49
+```
+
+这里：
+
+```text
+dev enp7s0
+src 172.19.26.49
+```
+
+通常就是认证所应使用的接口和源 IPv4。
+
+如果自动模式仍无法唯一判断：
+
+```ini
+interface = enp7s0
+```
+
+然后：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 ```
 
-检测认证类型：
+不要为了验证自动登录而远程执行：
 
 ```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf detect
+ip link set enp7s0 down
 ```
 
-检查公网：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf status
-```
-
-主动执行登录：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf login
-```
-
-在线跳过、离线登录：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
-```
-
-指定接口：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf --interface enp7s0 doctor
-```
-
-指定认证类型：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf --type 3 login
-```
+否则可能直接断掉 SSH。
 
 ---
 
-# systemd 状态说明
-
-`bjut-auto-login.service` 使用 `Type=oneshot`。
-
-因此一次任务执行完成后：
-
-```text
-Active: inactive (dead)
-```
-
-**属于正常状态，不代表服务故障。**
-
-正确判断自动认证是否启用，应检查：
-
-```bash
-systemctl status bjut-auto-login.timer
-```
-
-正常状态：
-
-```text
-Active: active (waiting)
-```
-
-service 最近一次执行应为：
-
-```text
-status=0/SUCCESS
-```
-
-典型日志：
-
-```text
-Starting bjut-auto-login.service...
-online: interface=enp7s0, skip login
-bjut-auto-login.service: Deactivated successfully.
-Finished bjut-auto-login.service.
-```
-
-这表示 timer → service → `ensure` 整条链路正常。
-
----
-
-# Type 3 实际验证状态
-
-BJUT 有线 Type 3 已完成如下真实闭环测试：
-
-```text
-已认证在线
-    ↓
-systemd timer 周期检查
-    ↓
-校园网认证失效
-    ↓
-下一轮 ensure 检测离线
-    ↓
-type=3 Portal 协议自动认证成功
-    ↓
-status = online
-```
-
-实际成功日志形式：
-
-```text
-type=3 interface=enp7s0: Portal协议认证成功！
-```
-
-因此 Type 3 不仅完成了协议级测试，也完成了 systemd 自动恢复测试。
-
----
-
-# 安全说明
+# 16. 安全设计
 
 - Type 3 使用 HTTPS。
 - Type 1 / Type 2 默认优先 HTTPS。
-- 只有明确设置 `allow_http_fallback = true` 才允许 Type 1 / Type 2 回退到 HTTP。
-- 带认证信息的 Portal URL 通过 `curl --config -` 从标准输入传给 curl，不直接暴露在 curl 的进程参数中。
-- 密码配置文件建议始终保持 `0600`。
-- 不要把真实 `config.ini`、密码、Cookie、Token 提交到 Git。
+- HTTP fallback 默认关闭。
+- Portal 请求不读取系统 HTTP/HTTPS proxy。
+- Portal 请求绑定选定接口。
+- Portal HTTP 请求强制使用 IPv4 传输，避免接口选择被 AAAA / IPv6 路由干扰。
+- 含凭据的完整 URL 通过 `curl --config -` 从 stdin 传给 curl，不出现在 curl argv。
+- curl 错误信息会脱敏。
+- 非 2xx Portal 响应只记录 HTTP 状态，不输出响应体，降低敏感信息回显风险。
+- systemd 配置使用 `UMask=0077`、`NoNewPrivileges=true`、`ProtectSystem=strict` 等限制。
+- 配置文件建议仅 root 可读。
 
 ---
 
-# WireGuard / Tailscale / VPN 环境
+# 17. 协议实现说明
 
-脚本会拒绝明显的虚拟网卡，例如：
+Type 3 当前流程：
 
 ```text
-wg0
-tun0
-tailscale0
-docker0
-```
-
-认证请求通过：
-
-```text
-curl --interface <physical-interface>
-```
-
-绑定到校园网物理接口，并禁用环境代理参与认证请求。
-
-如果安装 WireGuard/Tailscale 后出现认证异常，优先运行：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
-```
-
-确认 `interface` 是真正连接 BJUT 校园网的物理接口。
-
----
-
-# 故障排查
-
-## `sudo: ./install.sh: 找不到命令` / 无法执行
-
-更新仓库并检查权限：
-
-```bash
-git pull --ff-only
-ls -l install.sh
-```
-
-正常应类似：
-
-```text
--rwxr-xr-x
-```
-
-旧 checkout 可执行：
-
-```bash
-chmod +x install.sh
-sudo ./install.sh
-```
-
-或者：
-
-```bash
-sudo bash install.sh
-```
-
-## 无法自动识别网卡
-
-```bash
-ip route show table main default
-ip -br addr
-```
-
-确认实际物理接口后：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf --interface enp7s0 doctor
-```
-
-## 自动认证失败
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
-systemctl status bjut-auto-login.service --no-pager
-journalctl -u bjut-auto-login.service -n 100 --no-pager
-```
-
-如果 `doctor` 能识别 Portal，但 `login` 返回认证网关错误，请保留完整的非敏感错误信息用于排查。
-
----
-
-# 更新
-
-```bash
-cd BJUT-Auto-Login-Headless-
-git pull --ff-only
-sudo ./install.sh
-```
-
-更新后建议：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
-sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
-sudo systemctl restart bjut-auto-login.timer
-```
-
----
-
-# 卸载
-
-保留配置：
-
-```bash
-sudo ./uninstall.sh
-```
-
-同时删除配置：
-
-```bash
-sudo ./uninstall.sh --purge
-```
-
----
-
-# Type 3 协议概要
-
-新版 BJUT 有线认证大致流程：
-
-```text
-lgn6.bjut.edu.cn/drcom/getipv6
-        ↓
-获取网关观测 IPv6
-        ↓
-获取校园网物理接口 IPv4
-        ↓
-登录参数 UTF-16 code unit XOR 0x16
-        ↓
-十六进制编码
-        ↓
-lgn.bjut.edu.cn:802/eportal/portal/login
-        ↓
+确定物理接口和源 IPv4
+    ↓
+GET https://lgn6.bjut.edu.cn/drcom/getipv6
+    ↓
+取得 Portal 观测到的 IPv6
+    ↓
+用户名 / 密码 / IPv4 / IPv6 等字段
+UTF-16 code unit XOR 0x16
+    ↓
+hex 编码
+    ↓
+GET https://lgn.bjut.edu.cn:802/eportal/portal/login
+    ↓
 解析 JSONP result
 ```
 
+Type 1 / Type 2 的参数顺序和重复 `lang=zh-cn` / `lang=zh` 已按当前参考实现对齐。
+
 ---
 
-# 开发与测试
+# 18. 开发与测试
 
-项目无第三方 Python 包依赖：
+项目没有第三方 Python 包依赖。
+
+运行：
 
 ```bash
 python3 -m py_compile bjut_auth.py
@@ -755,12 +757,47 @@ python3 -m unittest discover -s tests -v
 bash -n install.sh uninstall.sh
 ```
 
-GitHub Actions 会在 Python 3.8 / 3.10 / 3.12 上运行测试。
+测试覆盖：
+
+- Type 3 XOR 加密
+- Unicode UTF-16 code unit 加密
+- JSONP 解析
+- Type 1 / Type 2 请求参数
+- 重复 `lang`
+- 虚拟接口排除
+- Fake-IP 排除
+- route `dev/src` 解析
+- 单网口无 default route
+- 双网口 Portal 路由选择
+- 双网口 default route 缺失 fallback
+- 多地址接口的路由源 IPv4
+- HTTP 5xx 瞬时重试
+- 非瞬时 4xx 不重试
+- `%` 密码
+- 显式缺失配置
+- 未知配置字段
+- 错误布尔值
+- connectivity URL 校验
+- 示例凭据检测
+- `doctor` Portal 失败退出码
+- `doctor` 配置凭据不会被临时环境变量掩盖
+
+GitHub Actions 会在多个 Python 版本上执行测试。
 
 ---
 
-# 致谢与许可
+# 19. 致谢与许可
 
-现行 BJUT Portal 端点、参数与认证流程参考并重新实现自 [`key-zhzr/BJUT-Auto-Login`](https://github.com/key-zhzr/BJUT-Auto-Login)，原项目采用 MIT License。相关许可声明见 [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES)。
+当前 BJUT Portal 端点、参数和认证流程参考：
 
-本项目采用 MIT License。
+- `key-zhzr/BJUT-Auto-Login`
+
+本项目也参考该项目公开的校园网络信息来设计多网口 fallback 判断。
+
+原项目采用 MIT License。相关许可见：
+
+```text
+THIRD_PARTY_NOTICES
+```
+
+本项目同样采用 MIT License。

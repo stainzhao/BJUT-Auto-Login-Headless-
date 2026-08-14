@@ -1,5 +1,11 @@
-This project references the current BJUT portal protocol implementation in:
+This project references the current BJUT portal protocol implementation and
+public campus-network information in:
+
 https://github.com/key-zhzr/BJUT-Auto-Login
+
+The headless implementation is independently organized for Linux CLI/systemd
+use. Portal endpoints, request parameters, protocol behavior, and the fallback
+campus-address heuristic were informed by the upstream MIT-licensed project.
 
 MIT License
 

@@ -9,15 +9,39 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.10", "3.12"]
+        python-version: ["3.8", "3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Syntax check
+
+      - name: Python syntax
         run: python -m py_compile bjut_auth.py
+
       - name: Unit tests
         run: python -m unittest discover -s tests -v
+
       - name: Shell syntax
         run: bash -n install.sh uninstall.sh
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CLI without systemd
+        run: sudo ./install.sh --no-systemd
+
+      - name: Verify installed files
+        run: |
+          /usr/local/bin/bjut-auth --version
+          test "$(stat -c '%a' /usr/local/bin/bjut-auth)" = "755"
+          test "$(stat -c '%a' /etc/bjut-auto-login.conf)" = "600"
+
+      - name: Uninstall
+        run: |
+          sudo ./uninstall.sh --purge
+          test ! -e /usr/local/bin/bjut-auth
+          test ! -e /etc/bjut-auto-login.conf
