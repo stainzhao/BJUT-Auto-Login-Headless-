@@ -4,7 +4,7 @@
 
 项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
 
-当前版本：`0.3.0`
+当前版本：`0.3.1`
 
 > Type 3（BJUT 有线 `lgn`）已经在真实服务器环境完成“认证失效 → systemd timer 检测离线 → 自动重新认证 → `status=online`”闭环验证。
 >
@@ -24,7 +24,8 @@
 - 认证请求通过 `curl --interface` 绑定到选定接口
 - 排除明显的 WireGuard / TUN / Tailscale / Docker 等虚拟接口
 - Type 3 登录参数按现行 Portal 算法加密
-- Portal 瞬时 `HTTP 500/502/503/504` 等错误进行有限重试
+- Portal DNS 解析、连接、TLS 或瞬时 5xx 异常时进行受控回退
+- `lgn6.bjut.edu.cn` / `lgn.bjut.edu.cn` 固定地址回退仍保留原 HTTPS 主机名和 SNI
 - `doctor` 部署前自检
 - `status` 公网状态检测
 - `ensure`：在线跳过，离线登录
@@ -181,7 +182,7 @@ sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 正常输出类似：
 
 ```text
-BJUT Auto Login 0.3.0
+BJUT Auto Login 0.3.1
 python: 3.12.3
 curl: OK (/usr/bin/curl)
 ip: OK (/usr/sbin/ip)
@@ -354,20 +355,31 @@ journalctl --disk-usage
 
 ---
 
-# 10. 瞬时网络错误
+# 10. 瞬时网络与 DNS 错误
 
-服务器开机、DHCP 更新、IPv6 尚未完全就绪或 Portal 短时异常时，可能遇到：
+服务器开机、DHCP 更新、IPv6 尚未完全就绪、校园 DNS 暂时异常或 Portal 短时异常时，可能遇到：
 
 ```text
+curl: (6) Could not resolve host: lgn6.bjut.edu.cn
 HTTP 500
 HTTP 502
 HTTP 503
 HTTP 504
 ```
 
-当前版本对典型瞬时 HTTP 状态和连接失败做**有限重试**，不会无限循环。
+当前版本首先按正常 DNS 访问 Portal。只有 BJUT 已知 Portal 域名出现 DNS、连接、TLS、超时或瞬时 5xx 错误时，才使用受控固定地址回退：
 
-如果本轮仍失败，systemd timer 会在下一轮继续检查。
+```text
+lgn6.bjut.edu.cn:443 -> 172.30.201.2 / 172.30.201.10
+lgn.bjut.edu.cn:802  -> 172.30.201.2 / 172.30.201.10
+wlgn.bjut.edu.cn:443 -> 10.21.251.3
+```
+
+实现使用 `curl --resolve`，因此 URL 中仍然是 `lgn6.bjut.edu.cn` / `lgn.bjut.edu.cn`，HTTPS 主机名、SNI 和证书校验不会因为回退到固定 IPv4 而被替换成裸 IP。
+
+固定地址回退只允许上述白名单 Portal；不会对普通互联网域名使用。
+
+如果本轮所有有限尝试仍失败，systemd timer 会在下一轮继续检查，不会在单次进程里无限循环。
 
 永久配置错误不会被无限掩盖，例如：
 
@@ -543,6 +555,8 @@ Agent 不应仅根据接口名猜 `type`。
 
 如果自动判断唯一失败，Agent 可以根据 `doctor`、`ip -4 addr` 和 `ip -4 route get 172.30.201.2` 的结果确定校园接口，再写入 `interface = ...`。
 
+Agent 不应因为 `lgn6.bjut.edu.cn` 系统 DNS 解析失败而立即修改 `/etc/hosts`；当前版本会在程序内部对已知 BJUT Portal 做固定地址回退。
+
 ## E. doctor
 
 ```bash
@@ -633,7 +647,7 @@ Agent 最终汇报示例：
 
 ```text
 BJUT Auto Login 部署完成
-- version: 0.3.0
+- version: 0.3.1
 - interface: enp7s0
 - IPv4: 172.x.x.x
 - portal: type 3
@@ -712,6 +726,7 @@ ip link set enp7s0 down
 - Portal 请求不读取系统 HTTP/HTTPS proxy。
 - Portal 请求绑定选定接口。
 - Portal HTTP 请求强制使用 IPv4 传输，避免接口选择被 AAAA / IPv6 路由干扰。
+- 固定地址回退仅允许内置 BJUT Portal 白名单，并继续使用原 HTTPS 主机名/SNI。
 - 含凭据的完整 URL 通过 `curl --config -` 从 stdin 传给 curl，不出现在 curl argv。
 - curl 错误信息会脱敏。
 - 非 2xx Portal 响应只记录 HTTP 状态，不输出响应体，降低敏感信息回显风险。
@@ -726,6 +741,9 @@ Type 3 当前流程：
 
 ```text
 确定物理接口和源 IPv4
+    ↓
+正常 DNS 请求 lgn6.bjut.edu.cn
+失败时仅对受信 Portal 使用 172.30.201.2 / 172.30.201.10 回退
     ↓
 GET https://lgn6.bjut.edu.cn/drcom/getipv6
     ↓
@@ -772,7 +790,10 @@ bash -n install.sh uninstall.sh
 - 双网口 default route 缺失 fallback
 - 多地址接口的路由源 IPv4
 - HTTP 5xx 瞬时重试
-- 非瞬时 4xx 不重试
+- Portal DNS 失败固定地址回退
+- 固定地址 `.2 -> .10` 顺序回退
+- 非 BJUT 域名禁止固定解析
+- 非瞬时 4xx 不回退
 - `%` 密码
 - 显式缺失配置
 - 未知配置字段
@@ -792,7 +813,7 @@ GitHub Actions 会在多个 Python 版本上执行测试。
 
 - `key-zhzr/BJUT-Auto-Login`
 
-本项目也参考该项目公开的校园网络信息来设计多网口 fallback 判断。
+本项目也参考该项目公开的校园网络信息来设计多网口和 Portal 固定地址 fallback 判断。
 
 原项目采用 MIT License。相关许可见：
 
