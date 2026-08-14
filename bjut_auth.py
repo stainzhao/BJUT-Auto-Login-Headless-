@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 DORM_HTTP_LOGIN = "http://10.21.221.98:801/eportal/portal/login"
 DORM_HTTPS_LOGIN = "https://10.21.221.98:802/eportal/portal/login"
@@ -37,6 +37,15 @@ TYPE2_ROUTE_DEST = "10.21.251.3"
 TYPE3_ROUTE_DEST = "172.30.201.2"
 PORTAL_ROUTE_DESTINATIONS = (TYPE3_ROUTE_DEST, TYPE2_ROUTE_DEST, TYPE1_ROUTE_DEST)
 
+# Fixed campus addresses published/used by the current reference implementation.
+# They are only used after normal DNS/connection attempts fail. curl --resolve
+# preserves the original HTTPS hostname and therefore TLS SNI/certificate checks.
+PORTAL_FIXED_RESOLVE = {
+    ("lgn6.bjut.edu.cn", 443): ("172.30.201.2", "172.30.201.10"),
+    ("lgn.bjut.edu.cn", 802): ("172.30.201.2", "172.30.201.10"),
+    ("wlgn.bjut.edu.cn", 443): ("10.21.251.3",),
+}
+
 LGN_PROGRAM_INDEX = "o4OBee1755497815"
 LGN_PAGE_INDEX = "cHAmjX1755497856"
 LGN_JS_VERSION = "4.2.2"
@@ -46,6 +55,7 @@ DEFAULT_CONNECTIVITY_URL = "https://www.baidu.com/"
 VIRTUAL_PREFIXES = ("wg", "tun", "tap", "tailscale", "zt", "docker", "br-", "veth", "virbr")
 SENSITIVE_QUERY_KEYS = ("user_password", "upass", "DDDDD", "user_account")
 TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
+CURL_NETWORK_ERROR_CODES = {5, 6, 7, 28, 35, 52, 56, 60}
 ALLOWED_CONFIG_KEYS = {
     "username", "password", "type", "interface",
     "allow_http_fallback", "connectivity_url",
@@ -320,8 +330,30 @@ def split_curl_response(text):
     return text[:position], status
 
 
-def curl_get(url, interface=None, referer=None, timeout=6, retries=1):
-    """Credential-bearing URL is supplied on stdin, never in curl argv."""
+def fixed_resolve_candidates(url):
+    """Return trusted fallback host/port/IP tuples for known BJUT portals."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return []
+    try:
+        port = parsed.port
+    except ValueError:
+        return []
+    if port is None:
+        if parsed.scheme == "https":
+            port = 443
+        elif parsed.scheme == "http":
+            port = 80
+        else:
+            return []
+    return [
+        (host, port, address)
+        for address in PORTAL_FIXED_RESOLVE.get((host, port), ())
+    ]
+
+
+def _curl_command(interface=None, referer=None, timeout=6, resolve=None):
     cmd = [
         "curl", "--ipv4", "--silent", "--show-error", "--noproxy", "*",
         "--connect-timeout", "3", "--max-time", str(timeout),
@@ -334,28 +366,81 @@ def curl_get(url, interface=None, referer=None, timeout=6, retries=1):
         cmd += ["--interface", interface]
     if referer:
         cmd += ["--referer", referer]
-    config = f'url = "{curl_config_escape(url)}"\n'
+    if resolve:
+        host, port, address = resolve
+        cmd += ["--resolve", f"{host}:{port}:{address}"]
+    return cmd
 
+
+def _curl_result(result):
+    if result.returncode != 0:
+        detail = redact_error_text((result.stderr or result.stdout).strip())
+        return None, AuthError(detail or f"curl 请求失败（exit={result.returncode}）")
+    try:
+        body, status = split_curl_response(result.stdout)
+    except AuthError as exc:
+        return None, exc
+    if 200 <= status < 300:
+        return body, None
+    return None, HttpStatusError(status)
+
+
+def curl_get(url, interface=None, referer=None, timeout=6, retries=1):
+    """GET a portal URL with bounded retries and trusted DNS fallback.
+
+    Credential-bearing URLs are supplied through curl config on stdin, never
+    process argv. Normal DNS is always attempted first. Only known BJUT portal
+    hostnames may fall back to pinned campus IPv4 addresses via --resolve.
+    """
+    config = f'url = "{curl_config_escape(url)}"\n'
     last_error = None
+    fallback_allowed = False
+
     for attempt in range(retries + 1):
-        result = run(cmd, timeout=timeout + 2, input_text=config)
-        if result.returncode != 0:
-            detail = redact_error_text((result.stderr or result.stdout).strip())
-            last_error = AuthError(detail or f"curl 请求失败（exit={result.returncode}）")
+        result = run(
+            _curl_command(interface, referer, timeout),
+            timeout=timeout + 2,
+            input_text=config,
+        )
+        body, error = _curl_result(result)
+        if error is None:
+            return body
+        last_error = error
+
+        if isinstance(error, HttpStatusError):
+            if error.status not in TRANSIENT_HTTP_STATUS:
+                raise error
+            fallback_allowed = True
         else:
-            try:
-                body, status = split_curl_response(result.stdout)
-            except AuthError as exc:
-                last_error = exc
-            else:
-                if 200 <= status < 300:
-                    return body
-                last_error = HttpStatusError(status)
-                if status not in TRANSIENT_HTTP_STATUS:
-                    raise last_error
+            fallback_allowed = result.returncode in CURL_NETWORK_ERROR_CODES
+            if not fallback_allowed:
+                raise error
+
         if attempt < retries:
             time.sleep(0.5 * (attempt + 1))
+
+    candidates = fixed_resolve_candidates(url) if fallback_allowed else []
+    for index, resolve in enumerate(candidates):
+        result = run(
+            _curl_command(interface, referer, timeout, resolve=resolve),
+            timeout=timeout + 2,
+            input_text=config,
+        )
+        body, error = _curl_result(result)
+        if error is None:
+            return body
+        last_error = error
+        if isinstance(error, HttpStatusError):
+            if error.status not in TRANSIENT_HTTP_STATUS:
+                raise error
+        elif result.returncode not in CURL_NETWORK_ERROR_CODES:
+            raise error
+        if index + 1 < len(candidates):
+            time.sleep(0.25)
+
     if last_error:
+        if candidates:
+            raise AuthError(f"{last_error}（已尝试校园网固定地址回退）")
         raise last_error
     raise AuthError("未知 curl 请求错误")
 
