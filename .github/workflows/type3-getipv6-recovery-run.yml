@@ -38,6 +38,16 @@ jobs:
           Path('/tmp/apply_type3_fix.py').write_text(script, encoding='utf-8')
           PY
           python3 /tmp/apply_type3_fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_type3_online_doctor.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'mock.patch.object(mod, "curl_get", return_value=body)'
+          new = 'mock.patch.object(mod, "_curl_get_once", return_value=body)'
+          if text.count(old) != 2:
+              raise SystemExit(f'expected two legacy curl_get mocks, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
 
       - name: Validate patch
         run: |
@@ -49,6 +59,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add bjut_auth.py tests/test_type3_getipv6_recovery.py README.md
+          git add bjut_auth.py tests/test_type3_getipv6_recovery.py tests/test_type3_online_doctor.py README.md
           git commit -m "Fix Type 3 IPv6 discovery recovery"
           git push origin HEAD:main
