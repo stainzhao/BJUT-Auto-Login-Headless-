@@ -4,7 +4,7 @@
 
 项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
 
-当前版本：`0.3.1`
+当前版本：`0.3.2`
 
 > Type 3（BJUT 有线 `lgn`）已经在真实服务器环境完成“认证失效 → systemd timer 检测离线 → 自动重新认证 → `status=online`”闭环验证。
 >
@@ -26,6 +26,7 @@
 - Type 3 登录参数按现行 Portal 算法加密
 - Portal DNS 解析、连接、TLS 或瞬时 5xx 异常时进行受控回退
 - `lgn6.bjut.edu.cn` / `lgn.bjut.edu.cn` 固定地址回退仍保留原 HTTPS 主机名和 SNI
+- Type 3 `getipv6` 正常请求保留系统原生地址族选择；`result != 1` 时继续尝试 `.2` / `.10` 两个校园端点
 - `doctor` 部署前自检
 - `status` 公网状态检测
 - `ensure`：在线跳过，离线登录
@@ -182,7 +183,7 @@ sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 正常输出类似：
 
 ```text
-BJUT Auto Login 0.3.1
+BJUT Auto Login 0.3.2
 python: 3.12.3
 curl: OK (/usr/bin/curl)
 ip: OK (/usr/sbin/ip)
@@ -367,7 +368,7 @@ HTTP 503
 HTTP 504
 ```
 
-当前版本首先按正常 DNS 访问 Portal。只有 BJUT 已知 Portal 域名出现 DNS、连接、TLS、超时或瞬时 5xx 错误时，才使用受控固定地址回退：
+当前版本首先按正常 DNS 访问 Portal。Type 3 的 `getipv6` 地址发现会保留系统原生地址族选择；若正常请求失败或返回 `result != 1`，会继续尝试受控固定地址。其他 BJUT Portal 域名仅在 DNS、连接、TLS、超时或瞬时 5xx 错误时使用固定地址回退：
 
 ```text
 lgn6.bjut.edu.cn:443 -> 172.30.201.2 / 172.30.201.10
@@ -647,7 +648,7 @@ Agent 最终汇报示例：
 
 ```text
 BJUT Auto Login 部署完成
-- version: 0.3.1
+- version: 0.3.2
 - interface: enp7s0
 - IPv4: 172.x.x.x
 - portal: type 3

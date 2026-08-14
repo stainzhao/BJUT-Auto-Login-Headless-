@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 DORM_HTTP_LOGIN = "http://10.21.221.98:801/eportal/portal/login"
 DORM_HTTPS_LOGIN = "https://10.21.221.98:802/eportal/portal/login"
@@ -356,15 +356,19 @@ def fixed_resolve_candidates(url):
     ]
 
 
-def _curl_command(interface=None, referer=None, timeout=6, resolve=None):
+def _curl_command(
+    interface=None, referer=None, timeout=6, resolve=None, force_ipv4=True,
+):
     cmd = [
-        "curl", "--ipv4", "--silent", "--show-error", "--noproxy", "*",
+        "curl", "--silent", "--show-error", "--noproxy", "*",
         "--connect-timeout", "3", "--max-time", str(timeout),
         "--header", "Accept: */*",
         "--header", "Cache-Control: no-cache, no-store",
         "--write-out", f"\n{CURL_STATUS_MARKER}%{{http_code}}",
         "--config", "-",
     ]
+    if force_ipv4:
+        cmd.insert(1, "--ipv4")
     if interface:
         cmd += ["--interface", interface]
     if referer:
@@ -387,6 +391,22 @@ def _curl_result(result):
         return body, None
     return None, HttpStatusError(status)
 
+
+def _curl_get_once(
+    url, interface=None, referer=None, timeout=6, resolve=None, force_ipv4=True,
+):
+    config = f'url = "{curl_config_escape(url)}"\n'
+    result = run(
+        _curl_command(
+            interface, referer, timeout, resolve=resolve, force_ipv4=force_ipv4
+        ),
+        timeout=timeout + 2,
+        input_text=config,
+    )
+    body, error = _curl_result(result)
+    if error is not None:
+        raise error
+    return body
 
 def curl_get(url, interface=None, referer=None, timeout=6, retries=1):
     """GET a portal URL with bounded retries and trusted DNS fallback.
@@ -483,28 +503,28 @@ def eportal_encrypt(value):
     return "".join(f"{unit ^ EPORTAL_XOR_KEY:02x}" for unit in units)
 
 
-def get_observed_ipv6(interface, timeout=6, retries=1, allow_portal_only=False):
-    query = urlencode([
-        ("callback", "dr1004"),
-        ("program_index", LGN_PROGRAM_INDEX),
-        ("page_index", LGN_PAGE_INDEX),
-        ("jsVersion", LGN_JS_VERSION),
-        ("v", random_request_id()),
-        ("lang", "zh"),
-    ])
-    body = curl_get(
-        f"{LGN_IPV6_URL}?{query}", interface, LGN_REFERER,
-        timeout=timeout, retries=retries,
-    )
+def _observed_ipv6_from_body(body, allow_portal_only=False):
     data = jsonp_object(body)
     try:
         result = int(data.get("result"))
     except (TypeError, ValueError) as exc:
         raise AuthError("IPv6 地址发现接口未返回有效 result 字段") from exc
+
+    message = data.get("msga", data.get("msg", ""))
+    if not isinstance(message, str):
+        message = json.dumps(message, ensure_ascii=False)
+    message = redact_error_text(message).replace("\r", " ").replace("\n", " ").strip()
+    if len(message) > 160:
+        message = message[:157] + "..."
+
     if result != 1:
         if allow_portal_only:
             return ""
-        raise AuthError("IPv6 地址发现接口未返回成功结果")
+        detail = f"result={result}"
+        if message:
+            detail += f", msg={message}"
+        raise AuthError(f"IPv6 地址发现接口未返回成功结果（{detail}）")
+
     value = str(data.get("ip", "")).strip()
     try:
         address = ipaddress.ip_address(value)
@@ -517,6 +537,70 @@ def get_observed_ipv6(interface, timeout=6, retries=1, allow_portal_only=False):
             return ""
         raise AuthError("IPv6 地址发现接口没有返回 IPv6")
     return str(address)
+
+
+def get_observed_ipv6(interface, timeout=6, retries=1, allow_portal_only=False):
+    query = urlencode([
+        ("callback", "dr1004"),
+        ("program_index", LGN_PROGRAM_INDEX),
+        ("page_index", LGN_PAGE_INDEX),
+        ("jsVersion", LGN_JS_VERSION),
+        ("v", random_request_id()),
+        ("lang", "zh"),
+    ])
+    url = f"{LGN_IPV6_URL}?{query}"
+
+    # v0.2.0 did not force this discovery request to IPv4 and was verified
+    # during a real Type 3 reconnect. Keep native address-family selection for
+    # the normal request; fixed --resolve fallbacks remain IPv4.
+    attempts = [(None, False)]
+    attempts.extend((resolve, True) for resolve in fixed_resolve_candidates(url))
+
+    last_error = None
+    portal_detected = False
+    for index, (resolve, force_ipv4) in enumerate(attempts):
+        tries = retries + 1 if resolve is None else 1
+        for attempt in range(tries):
+            try:
+                body = _curl_get_once(
+                    url,
+                    interface,
+                    LGN_REFERER,
+                    timeout=timeout,
+                    resolve=resolve,
+                    force_ipv4=force_ipv4,
+                )
+            except AuthError as exc:
+                last_error = exc
+                if attempt + 1 < tries:
+                    time.sleep(0.5 * (attempt + 1))
+                continue
+
+            try:
+                data = jsonp_object(body)
+                portal_detected |= "result" in data
+                observed = _observed_ipv6_from_body(
+                    body, allow_portal_only=allow_portal_only
+                )
+            except AuthError as exc:
+                # HTTP 200 + result=0 is an application-level failure. Continue
+                # to the alternate fixed campus endpoint instead of stopping.
+                last_error = exc
+                break
+
+            if allow_portal_only:
+                return ""
+            return observed
+
+        if index + 1 < len(attempts):
+            time.sleep(0.25)
+
+    if allow_portal_only and portal_detected:
+        return ""
+    if last_error:
+        suffix = "（已尝试正常解析及校园固定地址）" if len(attempts) > 1 else ""
+        raise AuthError(f"IPv6 地址发现失败：{last_error}{suffix}")
+    raise AuthError("IPv6 地址发现失败：未取得有效响应")
 
 
 def type1_query(username, password, local_ipv4, request_id=None):

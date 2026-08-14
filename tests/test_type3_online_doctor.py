@@ -27,14 +27,14 @@ def args(**kwargs):
 class Type3OnlineDoctorTests(unittest.TestCase):
     def test_portal_only_probe_accepts_result_zero(self):
         body = 'dr1004({"result":0,"msg":"already online"});'
-        with mock.patch.object(mod, "curl_get", return_value=body):
+        with mock.patch.object(mod, "_curl_get_once", return_value=body):
             self.assertEqual(
                 mod.get_observed_ipv6("enp7s0", allow_portal_only=True), ""
             )
 
     def test_login_probe_still_rejects_result_zero(self):
         body = 'dr1004({"result":0,"msg":"already online"});'
-        with mock.patch.object(mod, "curl_get", return_value=body):
+        with mock.patch.object(mod, "_curl_get_once", return_value=body):
             with self.assertRaisesRegex(mod.AuthError, "未返回成功结果"):
                 mod.get_observed_ipv6("enp7s0")
 
