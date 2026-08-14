@@ -1,0 +1,11 @@
+[Unit]
+Description=BJUT campus network auto login
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bjut-auth --config /etc/bjut-auto-login.conf ensure
+
+[Install]
+WantedBy=multi-user.target
