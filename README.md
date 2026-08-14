@@ -4,7 +4,7 @@
 
 项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
 
-当前版本：`0.3.2`
+当前版本：`0.3.3`
 
 > Type 3（BJUT 有线 `lgn`）已经在真实服务器环境完成“认证失效 → systemd timer 检测离线 → 自动重新认证 → `status=online`”闭环验证。
 >
@@ -30,6 +30,7 @@
 - `doctor` 部署前自检
 - `status` 公网状态检测
 - `ensure`：在线跳过，离线登录
+- `ensure` 以最终公网状态为成功判据；Portal 5xx/超时但认证已生效时避免 systemd 假失败
 - systemd timer 周期巡检和掉线恢复
 - 配置文件安全检查
 - GitHub Actions 单元测试
@@ -183,7 +184,7 @@ sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 正常输出类似：
 
 ```text
-BJUT Auto Login 0.3.2
+BJUT Auto Login 0.3.3
 python: 3.12.3
 curl: OK (/usr/bin/curl)
 ip: OK (/usr/sbin/ip)
@@ -648,7 +649,7 @@ Agent 最终汇报示例：
 
 ```text
 BJUT Auto Login 部署完成
-- version: 0.3.2
+- version: 0.3.3
 - interface: enp7s0
 - IPv4: 172.x.x.x
 - portal: type 3

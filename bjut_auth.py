@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 
 DORM_HTTP_LOGIN = "http://10.21.221.98:801/eportal/portal/login"
 DORM_HTTPS_LOGIN = "https://10.21.221.98:802/eportal/portal/login"
@@ -904,6 +904,40 @@ def do_login(args, config, interface=None):
     return ok
 
 
+def confirm_online(interface, url, attempts=3, delay=1.5):
+    """Briefly confirm final Internet state after a portal login attempt."""
+    for attempt in range(attempts):
+        if internet_online(interface, url):
+            return True
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    return False
+
+
+def do_ensure_login(args, config, interface, check_url):
+    """Run one login attempt and use final connectivity as ensure's truth."""
+    try:
+        ok = do_login(args, config, interface)
+    except AuthError as exc:
+        # Some BJUT portal nodes can apply authentication and then return an
+        # HTTP 5xx/timeout. For unattended recovery, final connectivity is
+        # authoritative; retain the portal error as a warning.
+        if confirm_online(interface, check_url):
+            print(
+                f"warning: Portal 认证过程异常（{exc}），但公网已恢复，视为认证成功",
+                file=sys.stderr,
+            )
+            return 0
+        raise
+
+    if not ok:
+        return 2
+    if confirm_online(interface, check_url):
+        return 0
+    print("error: Portal 返回认证成功，但公网连通性仍为 offline", file=sys.stderr)
+    return 3
+
+
 def do_doctor(args, config, config_path):
     failures = 0
     print(f"BJUT Auto Login {VERSION}")
@@ -1034,14 +1068,10 @@ def main():
                 print(f"online: interface={interface}, skip login")
                 return 0
 
-        if not do_login(args, config, interface):
-            return 2
         if args.command == "ensure":
-            if internet_online(interface, check_url):
-                return 0
-            print("error: Portal 返回认证成功，但公网连通性仍为 offline", file=sys.stderr)
-            return 3
-        return 0
+            return do_ensure_login(args, config, interface, check_url)
+
+        return 0 if do_login(args, config, interface) else 2
     except AuthError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
