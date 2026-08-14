@@ -1,0 +1,289 @@
+name: one-shot-type3-getipv6-recovery-fix
+
+on:
+  push:
+    paths:
+      - .github/workflows/type3-getipv6-recovery-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch Type 3 getipv6 recovery
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('bjut_auth.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new):
+              global text
+              if old not in text:
+                  raise SystemExit('expected source block not found:\n' + old[:400])
+              text = text.replace(old, new, 1)
+
+          replace_once('VERSION = "0.3.1"', 'VERSION = "0.3.2"')
+
+          replace_once(
+              'def _curl_command(interface=None, referer=None, timeout=6, resolve=None):\n'
+              '    cmd = [\n'
+              '        "curl", "--ipv4", "--silent", "--show-error", "--noproxy", "*",\n',
+              'def _curl_command(\n'
+              '    interface=None, referer=None, timeout=6, resolve=None, force_ipv4=True,\n'
+              '):\n'
+              '    cmd = [\n'
+              '        "curl", "--silent", "--show-error", "--noproxy", "*",\n',
+          )
+          replace_once(
+              '        "--write-out", f"\\n{CURL_STATUS_MARKER}%{{http_code}}",\n'
+              '        "--config", "-",\n'
+              '    ]\n'
+              '    if interface:\n',
+              '        "--write-out", f"\\n{CURL_STATUS_MARKER}%{{http_code}}",\n'
+              '        "--config", "-",\n'
+              '    ]\n'
+              '    if force_ipv4:\n'
+              '        cmd.insert(1, "--ipv4")\n'
+              '    if interface:\n',
+          )
+
+          marker = '\n\ndef curl_get(url, interface=None, referer=None, timeout=6, retries=1):\n'
+          helper = '''\n\ndef _curl_get_once(\n    url, interface=None, referer=None, timeout=6, resolve=None, force_ipv4=True,\n):\n    config = f'url = "{curl_config_escape(url)}"\\n'\n    result = run(\n        _curl_command(\n            interface, referer, timeout, resolve=resolve, force_ipv4=force_ipv4\n        ),\n        timeout=timeout + 2,\n        input_text=config,\n    )\n    body, error = _curl_result(result)\n    if error is not None:\n        raise error\n    return body\n'''
+          if marker not in text:
+              raise SystemExit('curl_get marker not found')
+          text = text.replace(marker, helper + marker, 1)
+
+          pattern = re.compile(
+              r'def get_observed_ipv6\(interface, timeout=6, retries=1, allow_portal_only=False\):.*?\n\ndef type1_query',
+              re.S,
+          )
+          replacement = r'''def _observed_ipv6_from_body(body, allow_portal_only=False):
+    data = jsonp_object(body)
+    try:
+        result = int(data.get("result"))
+    except (TypeError, ValueError) as exc:
+        raise AuthError("IPv6 地址发现接口未返回有效 result 字段") from exc
+
+    message = data.get("msga", data.get("msg", ""))
+    if not isinstance(message, str):
+        message = json.dumps(message, ensure_ascii=False)
+    message = redact_error_text(message).replace("\r", " ").replace("\n", " ").strip()
+    if len(message) > 160:
+        message = message[:157] + "..."
+
+    if result != 1:
+        if allow_portal_only:
+            return ""
+        detail = f"result={result}"
+        if message:
+            detail += f", msg={message}"
+        raise AuthError(f"IPv6 地址发现接口未返回成功结果（{detail}）")
+
+    value = str(data.get("ip", "")).strip()
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        if allow_portal_only:
+            return ""
+        raise AuthError("IPv6 地址发现接口返回了无效地址") from exc
+    if address.version != 6:
+        if allow_portal_only:
+            return ""
+        raise AuthError("IPv6 地址发现接口没有返回 IPv6")
+    return str(address)
+
+
+def get_observed_ipv6(interface, timeout=6, retries=1, allow_portal_only=False):
+    query = urlencode([
+        ("callback", "dr1004"),
+        ("program_index", LGN_PROGRAM_INDEX),
+        ("page_index", LGN_PAGE_INDEX),
+        ("jsVersion", LGN_JS_VERSION),
+        ("v", random_request_id()),
+        ("lang", "zh"),
+    ])
+    url = f"{LGN_IPV6_URL}?{query}"
+
+    # 0.2.0 did not force this discovery request to IPv4 and was verified on
+    # a real Type 3 reconnect. Preserve the system's native address-family
+    # choice for the normal attempt, while keeping fixed-address fallbacks IPv4.
+    attempts = [(None, False)]
+    attempts.extend((resolve, True) for resolve in fixed_resolve_candidates(url))
+
+    last_error = None
+    portal_detected = False
+    for index, (resolve, force_ipv4) in enumerate(attempts):
+        tries = retries + 1 if resolve is None else 1
+        for attempt in range(tries):
+            try:
+                body = _curl_get_once(
+                    url,
+                    interface,
+                    LGN_REFERER,
+                    timeout=timeout,
+                    resolve=resolve,
+                    force_ipv4=force_ipv4,
+                )
+            except AuthError as exc:
+                last_error = exc
+                if attempt + 1 < tries:
+                    time.sleep(0.5 * (attempt + 1))
+                continue
+
+            try:
+                data = jsonp_object(body)
+                portal_detected |= "result" in data
+                observed = _observed_ipv6_from_body(
+                    body, allow_portal_only=allow_portal_only
+                )
+            except AuthError as exc:
+                # HTTP 200 + result=0 is an application-level failure. Do not
+                # stop at the first fixed portal; the alternate campus address
+                # may be the active endpoint for this network segment.
+                last_error = exc
+                break
+
+            if allow_portal_only:
+                return ""
+            return observed
+
+        if index + 1 < len(attempts):
+            time.sleep(0.25)
+
+    if allow_portal_only and portal_detected:
+        return ""
+    if last_error:
+        suffix = "（已尝试正常解析及校园固定地址）" if len(attempts) > 1 else ""
+        raise AuthError(f"IPv6 地址发现失败：{last_error}{suffix}")
+    raise AuthError("IPv6 地址发现失败：未取得有效响应")
+
+
+def type1_query'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'get_observed_ipv6 replacement count={count}')
+
+          path.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_type3_getipv6_recovery.py')
+          test.write_text(r'''import importlib.util
+import unittest
+from pathlib import Path
+from unittest import mock
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "bjut_auth.py"
+spec = importlib.util.spec_from_file_location("bjut_auth_getipv6", MODULE_PATH)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+
+class Type3GetIpv6RecoveryTests(unittest.TestCase):
+    def test_normal_getipv6_attempt_does_not_force_ipv4(self):
+        command = mod._curl_command("enp7s0", force_ipv4=False)
+        self.assertNotIn("--ipv4", command)
+        self.assertIn("--interface", command)
+
+    def test_other_portal_requests_still_force_ipv4_by_default(self):
+        command = mod._curl_command("enp7s0")
+        self.assertIn("--ipv4", command)
+
+    def test_result_zero_falls_through_to_second_fixed_address(self):
+        result_zero = 'dr1004({"result":0,"msg":"not ready"});'
+        result_one = 'dr1004({"result":1,"ip":"2001:db8::1234"});'
+        with mock.patch.object(
+            mod, "_curl_get_once", side_effect=[result_zero, result_zero, result_one]
+        ) as request, mock.patch.object(mod.time, "sleep"):
+            self.assertEqual(
+                mod.get_observed_ipv6("enp7s0", retries=0),
+                "2001:db8::1234",
+            )
+        self.assertEqual(request.call_count, 3)
+        self.assertFalse(request.call_args_list[0].kwargs["force_ipv4"])
+        self.assertTrue(request.call_args_list[1].kwargs["force_ipv4"])
+        self.assertTrue(request.call_args_list[2].kwargs["force_ipv4"])
+
+    def test_portal_only_accepts_result_zero_without_extra_requests(self):
+        result_zero = 'dr1004({"result":0,"msg":"already online"});'
+        with mock.patch.object(
+            mod, "_curl_get_once", return_value=result_zero
+        ) as request:
+            self.assertEqual(
+                mod.get_observed_ipv6(
+                    "enp7s0", retries=0, allow_portal_only=True
+                ),
+                "",
+            )
+        request.assert_called_once()
+
+    def test_all_result_zero_errors_include_safe_gateway_message(self):
+        result_zero = 'dr1004({"result":0,"msg":"ipv6 not ready"});'
+        with mock.patch.object(
+            mod, "_curl_get_once", return_value=result_zero
+        ), mock.patch.object(mod.time, "sleep"):
+            with self.assertRaises(mod.AuthError) as ctx:
+                mod.get_observed_ipv6("enp7s0", retries=0)
+        message = str(ctx.exception)
+        self.assertIn("result=0", message)
+        self.assertIn("ipv6 not ready", message)
+        self.assertIn("校园固定地址", message)
+
+    def test_dns_failure_can_recover_on_fixed_address(self):
+        result_one = 'dr1004({"result":1,"ip":"2001:db8::55"});'
+        with mock.patch.object(
+            mod,
+            "_curl_get_once",
+            side_effect=[mod.AuthError("Could not resolve host"), result_one],
+        ), mock.patch.object(mod.time, "sleep"):
+            self.assertEqual(
+                mod.get_observed_ipv6("enp7s0", retries=0),
+                "2001:db8::55",
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
+''', encoding='utf-8')
+
+          readme = Path('README.md')
+          doc = readme.read_text(encoding='utf-8')
+          doc = doc.replace('0.3.1', '0.3.2')
+          anchor = '- `lgn6.bjut.edu.cn` / `lgn.bjut.edu.cn` 固定地址回退仍保留原 HTTPS 主机名和 SNI\n'
+          extra = (
+              '- Type 3 `getipv6` 正常请求保留系统原生地址族选择；`result != 1` 时继续尝试 `.2` / `.10` 两个校园端点\n'
+          )
+          if extra not in doc:
+              if anchor not in doc:
+                  raise SystemExit('README feature anchor not found')
+              doc = doc.replace(anchor, anchor + extra, 1)
+          doc = doc.replace(
+              '当前版本首先按正常 DNS 访问 Portal。只有 BJUT 已知 Portal 域名出现 DNS、连接、TLS、超时或瞬时 5xx 错误时，才使用受控固定地址回退：',
+              '当前版本首先按正常 DNS 访问 Portal。Type 3 的 `getipv6` 地址发现会保留系统原生地址族选择；若正常请求失败或返回 `result != 1`，会继续尝试受控固定地址。其他 BJUT Portal 域名仅在 DNS、连接、TLS、超时或瞬时 5xx 错误时使用固定地址回退：',
+              1,
+          )
+          readme.write_text(doc, encoding='utf-8')
+          PY
+
+      - name: Validate patch
+        run: |
+          python3 -m py_compile bjut_auth.py
+          python3 -m unittest discover -s tests -v
+          bash -n install.sh uninstall.sh
+
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add bjut_auth.py tests/test_type3_getipv6_recovery.py README.md
+          git commit -m "Fix Type 3 IPv6 discovery recovery"
+          git push origin HEAD:main
