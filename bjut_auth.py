@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 
 DORM_HTTP_LOGIN = "http://10.21.221.98:801/eportal/portal/login"
 DORM_HTTPS_LOGIN = "https://10.21.221.98:802/eportal/portal/login"

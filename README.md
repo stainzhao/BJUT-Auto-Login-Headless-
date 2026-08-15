@@ -17,7 +17,7 @@
 
 项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
 
-当前版本：`0.3.3`
+当前版本：`0.3.4`
 
 > Type 3（BJUT 有线 `lgn`）已经在真实服务器环境完成“认证失效 → systemd timer 检测离线 → 自动重新认证 → `status=online`”闭环验证。
 >
@@ -45,6 +45,7 @@
 - `ensure`：在线跳过，离线登录
 - `ensure` 以最终公网状态为成功判据；Portal 5xx/超时但认证已生效时避免 systemd 假失败
 - systemd timer 周期巡检和掉线恢复
+- timer 使用 `OnActiveSec + OnUnitInactiveSec`，即使手动运行过 service 或重新启用 timer，也会重新建立下一次触发时间
 - 配置文件安全检查
 - GitHub Actions 单元测试
 
@@ -197,7 +198,7 @@ sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 正常输出类似：
 
 ```text
-BJUT Auto Login 0.3.3
+BJUT Auto Login 0.3.4
 python: 3.12.3
 curl: OK (/usr/bin/curl)
 ip: OK (/usr/sbin/ip)
@@ -303,7 +304,32 @@ systemctl status bjut-auto-login.timer --no-pager
 Active: active (waiting)
 ```
 
-默认约每 60 秒检查一次。
+首次启用或重启 timer 后约 20 秒执行第一次检查；之后每次 oneshot service 执行完毕约 60 秒后再次检查（另有少量 `AccuracySec` / `RandomizedDelaySec` 调度抖动）。
+
+当前版本使用：
+
+```ini
+OnActiveSec=20s
+OnUnitInactiveSec=60s
+```
+
+因此即使之前手动执行过 `bjut-auto-login.service`，或者先停用再重新启用 timer，也会从 timer 当前激活时间重新建立首个 deadline。
+
+正常状态必须有未来触发时间，例如：
+
+```text
+Active: active (waiting)
+Trigger: Sat 2026-08-15 18:10:xx CST
+```
+
+如果看到：
+
+```text
+Active: active (elapsed)
+Trigger: n/a
+```
+
+说明 timer 当前没有未来 deadline，不属于正常巡检状态。升级到 0.3.4 后重新执行 `sudo ./install.sh`；安装器会对已运行的 timer 执行 restart，使新调度规则立即生效。
 
 ---
 
@@ -670,7 +696,7 @@ Agent 最终汇报示例：
 
 ```text
 BJUT Auto Login 部署完成
-- version: 0.3.3
+- version: 0.3.4
 - interface: enp7s0
 - IPv4: 172.x.x.x
 - portal: type 3
@@ -825,6 +851,7 @@ bash -n install.sh uninstall.sh
 - 示例凭据检测
 - `doctor` Portal 失败退出码
 - `doctor` 配置凭据不会被临时环境变量掩盖
+- systemd timer 使用 `OnActiveSec + OnUnitInactiveSec`，并禁止回归到 `OnUnitActiveSec` / `Persistent=true`
 
 GitHub Actions 会在多个 Python 版本上执行测试。
 

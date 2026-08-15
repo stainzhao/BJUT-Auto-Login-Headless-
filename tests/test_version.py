@@ -10,7 +10,7 @@ spec.loader.exec_module(mod)
 
 class VersionTests(unittest.TestCase):
     def test_release_version(self):
-        self.assertEqual(mod.VERSION, "0.3.3")
+        self.assertEqual(mod.VERSION, "0.3.4")
 
 
 if __name__ == "__main__":
