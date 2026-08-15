@@ -24,7 +24,14 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Shell syntax
-        run: bash -n install.sh uninstall.sh
+        run: bash -n install.sh uninstall.sh NetworkManager/dispatcher.d/90-bjut-auto-login
+
+      - name: Network event units
+        run: |
+          grep -q '^OnUnitInactiveSec=60s$' systemd/bjut-auto-login.timer
+          grep -q '^OnActiveSec=2s$' systemd/bjut-auto-login-event.timer
+          grep -q '^RemainAfterElapse=no$' systemd/bjut-auto-login-event.timer
+          grep -q 'restart --no-block bjut-auto-login-event.timer' NetworkManager/dispatcher.d/90-bjut-auto-login
 
   install-smoke:
     runs-on: ubuntu-latest
