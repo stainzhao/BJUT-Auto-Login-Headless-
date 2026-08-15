@@ -64,6 +64,15 @@ fi
 if (( WITH_SYSTEMD )); then
   install -m 0644 "$SCRIPT_DIR/systemd/bjut-auto-login.service" /etc/systemd/system/bjut-auto-login.service
   install -m 0644 "$SCRIPT_DIR/systemd/bjut-auto-login.timer" /etc/systemd/system/bjut-auto-login.timer
+  install -m 0644 "$SCRIPT_DIR/systemd/bjut-auto-login-event.timer" /etc/systemd/system/bjut-auto-login-event.timer
+
+  NETWORK_EVENT_BACKEND=0
+  if systemctl cat NetworkManager.service >/dev/null 2>&1; then
+    install -d -m 0755 /etc/NetworkManager/dispatcher.d
+    install -m 0755 "$SCRIPT_DIR/NetworkManager/dispatcher.d/90-bjut-auto-login" /etc/NetworkManager/dispatcher.d/90-bjut-auto-login
+    NETWORK_EVENT_BACKEND=1
+  fi
+
   systemctl daemon-reload
 
   # During upgrades, reload an already-running timer so the new unit definition
@@ -80,6 +89,11 @@ echo "  sudo bjut-auth --config /etc/bjut-auto-login.conf doctor"
 echo "  sudo bjut-auth --config /etc/bjut-auto-login.conf ensure"
 if (( WITH_SYSTEMD )); then
   echo "  sudo systemctl enable --now bjut-auto-login.timer"
+  if (( NETWORK_EVENT_BACKEND )); then
+    echo "  NetworkManager 网络变化事件触发：已安装（2 秒防抖）"
+  else
+    echo "  NetworkManager 未检测到：保留 60 秒 systemd timer 兜底"
+  fi
 else
   echo "已跳过 systemd 单元安装。"
 fi

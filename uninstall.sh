@@ -27,9 +27,12 @@ HAS_SYSTEMD=0
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   HAS_SYSTEMD=1
   systemctl disable --now bjut-auto-login.timer >/dev/null 2>&1 || true
+  systemctl stop bjut-auto-login-event.timer >/dev/null 2>&1 || true
 fi
 
 rm -f /etc/systemd/system/bjut-auto-login.timer
+rm -f /etc/systemd/system/bjut-auto-login-event.timer
+rm -f /etc/NetworkManager/dispatcher.d/90-bjut-auto-login
 rm -f /etc/systemd/system/bjut-auto-login.service
 rm -f /usr/local/bin/bjut-auth
 

@@ -17,7 +17,7 @@
 
 项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
 
-当前版本：`0.3.4`
+当前版本：`0.4.0`
 
 > Type 3（BJUT 有线 `lgn`）已经在真实服务器环境完成“认证失效 → systemd timer 检测离线 → 自动重新认证 → `status=online`”闭环验证。
 >
@@ -46,6 +46,9 @@
 - `ensure` 以最终公网状态为成功判据；Portal 5xx/超时但认证已生效时避免 systemd 假失败
 - systemd timer 周期巡检和掉线恢复
 - timer 使用 `OnActiveSec + OnUnitInactiveSec`，即使手动运行过 service 或重新启用 timer，也会重新建立下一次触发时间
+- NetworkManager 网络变化事件可立即触发检查；2 秒防抖后复用同一个 `bjut-auto-login.service`，无额外常驻轮询进程
+- 60 秒 timer 继续作为 Portal 静默掉线的兜底检测
+- 公网健康检查支持可选 `connectivity_resolve_ip`，可将自有 VPS `/204` 域名固定到 IP，绕过 DNS 但保留 HTTPS SNI/证书校验
 - 配置文件安全检查
 - GitHub Actions 单元测试
 
@@ -96,6 +99,32 @@ sudo ./install.sh --no-systemd
 ```
 
 `install.sh` 可重复执行用于升级。已有 `/etc/bjut-auto-login.conf` 不会被覆盖。
+
+### 网络变化事件 + 60 秒兜底
+
+在使用 NetworkManager 的 Linux 系统上，安装器会自动安装 dispatcher。`up`、DHCP 租约变化、NetworkManager connectivity 状态变化和 `reapply` 等事件会重置一个 2 秒防抖 timer，随后触发与周期巡检相同的 `bjut-auto-login.service`。事件触发只在 `bjut-auto-login.timer` 已启用时生效，因此不会绕过原有的自动登录开关。
+
+Portal 静默下线通常不会改变网卡、IP 或路由，因此 **60 秒周期 timer 仍保留**。事件检查完成后，周期 timer 会从 service 再次进入 inactive 的时间重新计算下一次约 60 秒兜底检查，从而避免紧挨着重复检查。
+
+没有 NetworkManager 的系统不会安装事件 dispatcher，原有 systemd timer 行为不受影响。
+
+### 推荐使用自有 VPS `/204` 做公网健康检查
+
+现有 `connectivity_url` 已接受任意 HTTP 2xx，因此 VPS 返回 `204 No Content` 时无需下载正文。推荐配置：
+
+```ini
+connectivity_url = https://check.example.com/204
+connectivity_resolve_ip = 203.0.113.10
+```
+
+`connectivity_resolve_ip` 可留空。填写后程序通过 curl `--resolve` 直接连接指定 IP，同时 URL 主机名、TLS SNI 和证书验证仍保持不变。Nginx 可使用如下极简端点：
+
+```nginx
+location = /204 {
+    access_log off;
+    return 204;
+}
+```
 
 ---
 
@@ -198,7 +227,7 @@ sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 正常输出类似：
 
 ```text
-BJUT Auto Login 0.3.4
+BJUT Auto Login 0.4.0
 python: 3.12.3
 curl: OK (/usr/bin/curl)
 ip: OK (/usr/sbin/ip)

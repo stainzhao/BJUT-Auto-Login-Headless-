@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
-VERSION = "0.3.4"
+VERSION = "0.4.0"
 
 DORM_HTTP_LOGIN = "http://10.21.221.98:801/eportal/portal/login"
 DORM_HTTPS_LOGIN = "https://10.21.221.98:802/eportal/portal/login"
@@ -58,7 +58,7 @@ TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 CURL_NETWORK_ERROR_CODES = {5, 6, 7, 28, 35, 52, 56, 60}
 ALLOWED_CONFIG_KEYS = {
     "username", "password", "type", "interface",
-    "allow_http_fallback", "connectivity_url",
+    "allow_http_fallback", "connectivity_url", "connectivity_resolve_ip",
 }
 PLACEHOLDER_PASSWORDS = {"change_me", "<password>"}
 PLACEHOLDER_USERNAMES = {"<username>"}
@@ -741,7 +741,34 @@ def validate_connectivity_url(value):
     return value
 
 
-def internet_online(interface, url=DEFAULT_CONNECTIVITY_URL):
+def validate_connectivity_resolve_ip(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if any(c in value for c in ("\r", "\n", "\x00")):
+        raise AuthError("connectivity_resolve_ip 不允许包含控制字符")
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError as exc:
+        raise AuthError("connectivity_resolve_ip 必须是有效的 IPv4 或 IPv6 地址") from exc
+
+
+def connectivity_resolve_arg(url, address):
+    address = validate_connectivity_resolve_ip(address)
+    if not address:
+        return ""
+    parsed = urlparse(validate_connectivity_url(url))
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise AuthError("connectivity_url 包含无效端口") from exc
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    rendered = f"[{address}]" if ":" in address else address
+    return f"{parsed.hostname}:{port}:{rendered}"
+
+
+def internet_online(interface, url=DEFAULT_CONNECTIVITY_URL, resolve_ip=""):
     url = validate_connectivity_url(url)
     cmd = [
         "curl", "--noproxy", "*", "--silent", "--output", "/dev/null",
@@ -750,6 +777,9 @@ def internet_online(interface, url=DEFAULT_CONNECTIVITY_URL):
     ]
     if interface:
         cmd += ["--interface", interface]
+    resolve = connectivity_resolve_arg(url, resolve_ip)
+    if resolve:
+        cmd += ["--resolve", resolve]
     cmd += ["--config", "-"]
     result = run(
         cmd, timeout=7, input_text=f'url = "{curl_config_escape(url)}"\n'
@@ -776,6 +806,12 @@ def cfg_bool(config, key, default=False):
 def connectivity_url(config):
     value = config.get("connectivity_url", DEFAULT_CONNECTIVITY_URL).strip()
     return validate_connectivity_url(value or DEFAULT_CONNECTIVITY_URL)
+
+
+def connectivity_resolve_ip(config):
+    return validate_connectivity_resolve_ip(
+        config.get("connectivity_resolve_ip", "")
+    )
 
 
 def login_type_value(config):
@@ -815,6 +851,7 @@ def load_config(path):
     cfg_bool(config, "allow_http_fallback", False)
     login_type_value(config)
     connectivity_url(config)
+    connectivity_resolve_ip(config)
     return config, target
 
 
@@ -904,17 +941,17 @@ def do_login(args, config, interface=None):
     return ok
 
 
-def confirm_online(interface, url, attempts=3, delay=1.5):
+def confirm_online(interface, url, resolve_ip="", attempts=3, delay=1.5):
     """Briefly confirm final Internet state after a portal login attempt."""
     for attempt in range(attempts):
-        if internet_online(interface, url):
+        if internet_online(interface, url, resolve_ip):
             return True
         if attempt + 1 < attempts:
             time.sleep(delay)
     return False
 
 
-def do_ensure_login(args, config, interface, check_url):
+def do_ensure_login(args, config, interface, check_url, check_resolve_ip=""):
     """Run one login attempt and use final connectivity as ensure's truth."""
     try:
         ok = do_login(args, config, interface)
@@ -922,7 +959,7 @@ def do_ensure_login(args, config, interface, check_url):
         # Some BJUT portal nodes can apply authentication and then return an
         # HTTP 5xx/timeout. For unattended recovery, final connectivity is
         # authoritative; retain the portal error as a warning.
-        if confirm_online(interface, check_url):
+        if confirm_online(interface, check_url, check_resolve_ip):
             print(
                 f"warning: Portal 认证过程异常（{exc}），但公网已恢复，视为认证成功",
                 file=sys.stderr,
@@ -932,7 +969,7 @@ def do_ensure_login(args, config, interface, check_url):
 
     if not ok:
         return 2
-    if confirm_online(interface, check_url):
+    if confirm_online(interface, check_url, check_resolve_ip):
         return 0
     print("error: Portal 返回认证成功，但公网连通性仍为 offline", file=sys.stderr)
     return 3
@@ -989,7 +1026,9 @@ def do_doctor(args, config, config_path):
         print(
             f"ipv4: {interface_ipv4(interface, None if wireless else TYPE3_ROUTE_DEST)}"
         )
-        online = internet_online(interface, connectivity_url(config))
+        online = internet_online(
+            interface, connectivity_url(config), connectivity_resolve_ip(config)
+        )
         print("internet: " + ("online" if online else "offline"))
         try:
             print(
@@ -1045,9 +1084,10 @@ def main():
         )
         interface = resolve_interface(args, config, allow_http)
         check_url = connectivity_url(config)
+        check_resolve_ip = connectivity_resolve_ip(config)
 
         if args.command == "status":
-            online = internet_online(interface, check_url)
+            online = internet_online(interface, check_url, check_resolve_ip)
             print("online" if online else "offline")
             return 0 if online else 1
 
@@ -1064,12 +1104,14 @@ def main():
             issue = credential_issue(args, config)
             if issue:
                 raise AuthError(f"{issue}；ensure 无法保证后续自动重连")
-            if internet_online(interface, check_url):
+            if internet_online(interface, check_url, check_resolve_ip):
                 print(f"online: interface={interface}, skip login")
                 return 0
 
         if args.command == "ensure":
-            return do_ensure_login(args, config, interface, check_url)
+            return do_ensure_login(
+                args, config, interface, check_url, check_resolve_ip
+            )
 
         return 0 if do_login(args, config, interface) else 2
     except AuthError as exc:

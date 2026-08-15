@@ -1,0 +1,8 @@
+[Unit]
+Description=Debounce BJUT auto-login after network changes
+
+[Timer]
+OnActiveSec=2s
+AccuracySec=1s
+RemainAfterElapse=no
+Unit=bjut-auto-login.service

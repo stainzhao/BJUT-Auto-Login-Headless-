@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+iface="${1:-}"
+action="${2:-}"
+
+case "$action" in
+  up|dhcp4-change|dhcp6-change|connectivity-change|reapply) ;;
+  *) exit 0 ;;
+esac
+
+# Ignore obvious virtual interfaces. connectivity-change may have an empty iface.
+case "$iface" in
+  lo|wg*|tun*|tap*|tailscale*|zt*|docker*|br-*|veth*|virbr*) exit 0 ;;
+esac
+
+# Event-driven login is opt-in together with the normal periodic timer.
+# restart resets the 2 s debounce window when several events arrive together.
+if systemctl is-enabled --quiet bjut-auto-login.timer 2>/dev/null; then
+  systemctl restart --no-block bjut-auto-login-event.timer >/dev/null 2>&1 || true
+fi
