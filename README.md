@@ -108,9 +108,15 @@ Portal 静默下线通常不会改变网卡、IP 或路由，因此 **60 秒周�
 
 没有 NetworkManager 的系统不会安装事件 dispatcher，原有 systemd timer 行为不受影响。
 
-### 推荐使用自有 VPS `/204` 做公网健康检查
+### 公网健康检查
 
-现有 `connectivity_url` 已接受任意 HTTP 2xx，因此 VPS 返回 `204 No Content` 时无需下载正文。推荐配置：
+默认使用小米的轻量 HTTP 204 探测地址：
+
+```ini
+connectivity_url = http://connect.rom.miui.com/generate_204
+```
+
+该端点正常联网时返回 `204 No Content`，无需下载网页正文。`connectivity_url` 接受任意 HTTP 2xx，因此也可以替换为自己的 VPS `/204`：
 
 ```ini
 connectivity_url = https://check.example.com/204
@@ -155,7 +161,7 @@ interface =
 allow_http_fallback = false
 
 # 用于确认是否真正访问公网。
-connectivity_url = https://www.baidu.com/
+connectivity_url = http://connect.rom.miui.com/generate_204
 ```
 
 配置权限必须收紧：
