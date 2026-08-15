@@ -1,0 +1,188 @@
+name: one-shot-v040-network-events
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Apply v0.4.0 optimization
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Version.
+          p = Path('bjut_auth.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('VERSION = "0.3.4"', 'VERSION = "0.4.0"', 1)
+          s = s.replace(
+              '    "allow_http_fallback", "connectivity_url",\n}',
+              '    "allow_http_fallback", "connectivity_url", "connectivity_resolve_ip",\n}',
+              1,
+          )
+
+          old = '''def internet_online(interface, url=DEFAULT_CONNECTIVITY_URL):\n    url = validate_connectivity_url(url)\n    cmd = [\n        "curl", "--noproxy", "*", "--silent", "--output", "/dev/null",\n        "--connect-timeout", "3", "--max-time", "5",\n        "--write-out", "%{http_code}",\n    ]\n    if interface:\n        cmd += ["--interface", interface]\n    cmd += ["--config", "-"]\n    result = run(\n        cmd, timeout=7, input_text=f'url = "{curl_config_escape(url)}"\\n'\n    )\n    try:\n        code = int(result.stdout.strip())\n    except ValueError:\n        return False\n    return result.returncode == 0 and 200 <= code < 300\n'''
+          new = '''def validate_connectivity_resolve_ip(value):\n    value = (value or "").strip()\n    if not value:\n        return ""\n    if any(c in value for c in ("\\r", "\\n", "\\x00")):\n        raise AuthError("connectivity_resolve_ip 不允许包含控制字符")\n    try:\n        return str(ipaddress.ip_address(value))\n    except ValueError as exc:\n        raise AuthError("connectivity_resolve_ip 必须是有效的 IPv4 或 IPv6 地址") from exc\n\n\ndef connectivity_resolve_arg(url, address):\n    address = validate_connectivity_resolve_ip(address)\n    if not address:\n        return ""\n    parsed = urlparse(validate_connectivity_url(url))\n    try:\n        port = parsed.port\n    except ValueError as exc:\n        raise AuthError("connectivity_url 包含无效端口") from exc\n    if port is None:\n        port = 443 if parsed.scheme == "https" else 80\n    rendered = f"[{address}]" if ":" in address else address\n    return f"{parsed.hostname}:{port}:{rendered}"\n\n\ndef internet_online(interface, url=DEFAULT_CONNECTIVITY_URL, resolve_ip=""):\n    url = validate_connectivity_url(url)\n    cmd = [\n        "curl", "--noproxy", "*", "--silent", "--output", "/dev/null",\n        "--connect-timeout", "3", "--max-time", "5",\n        "--write-out", "%{http_code}",\n    ]\n    if interface:\n        cmd += ["--interface", interface]\n    resolve = connectivity_resolve_arg(url, resolve_ip)\n    if resolve:\n        cmd += ["--resolve", resolve]\n    cmd += ["--config", "-"]\n    result = run(\n        cmd, timeout=7, input_text=f'url = "{curl_config_escape(url)}"\\n'\n    )\n    try:\n        code = int(result.stdout.strip())\n    except ValueError:\n        return False\n    return result.returncode == 0 and 200 <= code < 300\n'''
+          if old not in s:
+              raise SystemExit('internet_online block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''def connectivity_url(config):\n    value = config.get("connectivity_url", DEFAULT_CONNECTIVITY_URL).strip()\n    return validate_connectivity_url(value or DEFAULT_CONNECTIVITY_URL)\n'''
+          new = old + '''\n\ndef connectivity_resolve_ip(config):\n    return validate_connectivity_resolve_ip(\n        config.get("connectivity_resolve_ip", "")\n    )\n'''
+          if old not in s:
+              raise SystemExit('connectivity_url helper not found')
+          s = s.replace(old, new, 1)
+          s = s.replace('    connectivity_url(config)\n    return config, target', '    connectivity_url(config)\n    connectivity_resolve_ip(config)\n    return config, target', 1)
+
+          s = s.replace(
+              'def confirm_online(interface, url, attempts=3, delay=1.5):',
+              'def confirm_online(interface, url, resolve_ip="", attempts=3, delay=1.5):',
+              1,
+          )
+          s = s.replace('        if internet_online(interface, url):\n', '        if internet_online(interface, url, resolve_ip):\n', 1)
+          s = s.replace(
+              'def do_ensure_login(args, config, interface, check_url):',
+              'def do_ensure_login(args, config, interface, check_url, check_resolve_ip=""):',
+              1,
+          )
+          s = s.replace('        if confirm_online(interface, check_url):\n', '        if confirm_online(interface, check_url, check_resolve_ip):\n', 1)
+          s = s.replace('    if confirm_online(interface, check_url):\n', '    if confirm_online(interface, check_url, check_resolve_ip):\n', 1)
+
+          # doctor: resolve optional health endpoint IP once and pass it to curl.
+          s = s.replace(
+              '        online = internet_online(interface, connectivity_url(config))\n',
+              '        online = internet_online(\n            interface, connectivity_url(config), connectivity_resolve_ip(config)\n        )\n',
+              1,
+          )
+
+          # main: compute the optional pinned health-check address once.
+          s = s.replace(
+              '        check_url = connectivity_url(config)\n\n        if args.command == "status":\n            online = internet_online(interface, check_url)\n',
+              '        check_url = connectivity_url(config)\n        check_resolve_ip = connectivity_resolve_ip(config)\n\n        if args.command == "status":\n            online = internet_online(interface, check_url, check_resolve_ip)\n',
+              1,
+          )
+          s = s.replace(
+              '            if internet_online(interface, check_url):\n',
+              '            if internet_online(interface, check_url, check_resolve_ip):\n',
+              1,
+          )
+          s = s.replace(
+              '            return do_ensure_login(args, config, interface, check_url)\n',
+              '            return do_ensure_login(\n                args, config, interface, check_url, check_resolve_ip\n            )\n',
+              1,
+          )
+          p.write_text(s, encoding='utf-8')
+
+          # Config example: 204 endpoint + optional DNS-independent pinning.
+          p = Path('config.example.ini')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              '# 用于判断是否真正访问公网。建议使用稳定的 HTTPS 地址。\nconnectivity_url = https://www.baidu.com/\n',
+              '# 用于判断是否真正访问公网。默认保持兼容；若有自己的 VPS，推荐改为返回 HTTP 204 的极轻量 HTTPS 地址。\nconnectivity_url = https://www.baidu.com/\n\n# 可选：把上面的健康检查域名固定到指定 IP，绕过 DNS，同时仍保留 HTTPS SNI/证书校验。\n# 例如 connectivity_url = https://check.example.com/204 时填写该域名对应的 VPS IP。\nconnectivity_resolve_ip =\n',
+              1,
+          )
+          p.write_text(s, encoding='utf-8')
+
+          # Debounce timer used only by network-event dispatcher.
+          Path('systemd/bjut-auto-login-event.timer').write_text('''[Unit]\nDescription=Debounce BJUT auto-login after network changes\n\n[Timer]\nOnActiveSec=2s\nAccuracySec=1s\nRemainAfterElapse=no\nUnit=bjut-auto-login.service\n''', encoding='utf-8')
+
+          # NetworkManager dispatcher: no long-running work in dispatcher itself.
+          dispatcher = Path('NetworkManager/dispatcher.d/90-bjut-auto-login')
+          dispatcher.parent.mkdir(parents=True, exist_ok=True)
+          dispatcher.write_text('''#!/bin/sh\nset -eu\n\niface="${1:-}"\naction="${2:-}"\n\ncase "$action" in\n  up|dhcp4-change|dhcp6-change|connectivity-change|reapply) ;;\n  *) exit 0 ;;\nesac\n\n# Ignore obvious virtual interfaces. connectivity-change may have an empty iface.\ncase "$iface" in\n  lo|wg*|tun*|tap*|tailscale*|zt*|docker*|br-*|veth*|virbr*) exit 0 ;;\nesac\n\n# Event-driven login is opt-in together with the normal periodic timer.\n# restart resets the 2 s debounce window when several events arrive together.\nif systemctl is-enabled --quiet bjut-auto-login.timer 2>/dev/null; then\n  systemctl restart --no-block bjut-auto-login-event.timer >/dev/null 2>&1 || true\nfi\n''', encoding='utf-8')
+
+          # Installer/uninstaller.
+          p = Path('install.sh')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              '  install -m 0644 "$SCRIPT_DIR/systemd/bjut-auto-login.timer" /etc/systemd/system/bjut-auto-login.timer\n  systemctl daemon-reload\n',
+              '  install -m 0644 "$SCRIPT_DIR/systemd/bjut-auto-login.timer" /etc/systemd/system/bjut-auto-login.timer\n  install -m 0644 "$SCRIPT_DIR/systemd/bjut-auto-login-event.timer" /etc/systemd/system/bjut-auto-login-event.timer\n\n  NETWORK_EVENT_BACKEND=0\n  if systemctl cat NetworkManager.service >/dev/null 2>&1; then\n    install -d -m 0755 /etc/NetworkManager/dispatcher.d\n    install -m 0755 "$SCRIPT_DIR/NetworkManager/dispatcher.d/90-bjut-auto-login" /etc/NetworkManager/dispatcher.d/90-bjut-auto-login\n    NETWORK_EVENT_BACKEND=1\n  fi\n\n  systemctl daemon-reload\n',
+              1,
+          )
+          s = s.replace(
+              '  echo "  sudo systemctl enable --now bjut-auto-login.timer"\n',
+              '  echo "  sudo systemctl enable --now bjut-auto-login.timer"\n  if (( NETWORK_EVENT_BACKEND )); then\n    echo "  NetworkManager 网络变化事件触发：已安装（2 秒防抖）"\n  else\n    echo "  NetworkManager 未检测到：保留 60 秒 systemd timer 兜底"\n  fi\n',
+              1,
+          )
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('uninstall.sh')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              '  systemctl disable --now bjut-auto-login.timer >/dev/null 2>&1 || true\n',
+              '  systemctl disable --now bjut-auto-login.timer >/dev/null 2>&1 || true\n  systemctl stop bjut-auto-login-event.timer >/dev/null 2>&1 || true\n',
+              1,
+          )
+          s = s.replace(
+              'rm -f /etc/systemd/system/bjut-auto-login.timer\n',
+              'rm -f /etc/systemd/system/bjut-auto-login.timer\nrm -f /etc/systemd/system/bjut-auto-login-event.timer\nrm -f /etc/NetworkManager/dispatcher.d/90-bjut-auto-login\n',
+              1,
+          )
+          p.write_text(s, encoding='utf-8')
+
+          # Version test.
+          p = Path('tests/test_version.py')
+          s = p.read_text(encoding='utf-8').replace('"0.3.4"', '"0.4.0"')
+          p.write_text(s, encoding='utf-8')
+
+          # New regression tests.
+          Path('tests/test_network_events.py').write_text('''import unittest\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\n\n\nclass NetworkEventTests(unittest.TestCase):\n    def test_dispatcher_uses_supported_networkmanager_events(self):\n        text = (ROOT / "NetworkManager/dispatcher.d/90-bjut-auto-login").read_text(encoding="utf-8")\n        for action in ("up", "dhcp4-change", "dhcp6-change", "connectivity-change", "reapply"):\n            self.assertIn(action, text)\n        self.assertIn("systemctl is-enabled --quiet bjut-auto-login.timer", text)\n        self.assertIn("restart --no-block bjut-auto-login-event.timer", text)\n\n    def test_event_timer_debounces_into_main_service(self):\n        text = (ROOT / "systemd/bjut-auto-login-event.timer").read_text(encoding="utf-8")\n        self.assertIn("OnActiveSec=2s", text)\n        self.assertIn("RemainAfterElapse=no", text)\n        self.assertIn("Unit=bjut-auto-login.service", text)\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
+
+          Path('tests/test_connectivity_health.py').write_text('''import importlib.util\nimport unittest\nfrom pathlib import Path\nfrom types import SimpleNamespace\nfrom unittest import mock\n\nMODULE_PATH = Path(__file__).resolve().parents[1] / "bjut_auth.py"\nspec = importlib.util.spec_from_file_location("bjut_auth_connectivity", MODULE_PATH)\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\n\n\nclass ConnectivityHealthTests(unittest.TestCase):\n    def test_pinned_health_endpoint_uses_curl_resolve(self):\n        result = SimpleNamespace(returncode=0, stdout="204")\n        with mock.patch.object(mod, "run", return_value=result) as runner:\n            self.assertTrue(mod.internet_online(\n                "enp4s0", "https://check.example.com/204", "203.0.113.7"\n            ))\n        cmd = runner.call_args.args[0]\n        self.assertIn("--resolve", cmd)\n        self.assertIn("check.example.com:443:203.0.113.7", cmd)\n        self.assertIn("--noproxy", cmd)\n\n    def test_invalid_pinned_address_is_rejected(self):\n        with self.assertRaises(mod.AuthError):\n            mod.validate_connectivity_resolve_ip("not-an-ip")\n\n    def test_empty_pinned_address_keeps_normal_dns(self):\n        result = SimpleNamespace(returncode=0, stdout="204")\n        with mock.patch.object(mod, "run", return_value=result) as runner:\n            self.assertTrue(mod.internet_online(\n                "enp4s0", "https://check.example.com/204"\n            ))\n        self.assertNotIn("--resolve", runner.call_args.args[0])\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
+
+          # README: concise release/architecture documentation.
+          p = Path('README.md')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('当前版本：`0.3.4`', '当前版本：`0.4.0`', 1)
+          s = s.replace('BJUT Auto Login 0.3.4', 'BJUT Auto Login 0.4.0')
+          feature = '- timer 使用 `OnActiveSec + OnUnitInactiveSec`，即使手动运行过 service 或重新启用 timer，也会重新建立下一次触发时间\n'
+          extra = '- NetworkManager 网络变化事件可立即触发检查；2 秒防抖后复用同一个 `bjut-auto-login.service`，无额外常驻轮询进程\n- 60 秒 timer 继续作为 Portal 静默掉线的兜底检测\n- 公网健康检查支持可选 `connectivity_resolve_ip`，可将自有 VPS `/204` 域名固定到 IP，绕过 DNS 但保留 HTTPS SNI/证书校验\n'
+          if extra not in s:
+              if feature not in s:
+                  raise SystemExit('README feature anchor not found')
+              s = s.replace(feature, feature + extra, 1)
+
+          marker = '`install.sh` 可重复执行用于升级。已有 `/etc/bjut-auto-login.conf` 不会被覆盖。\n'
+          detail = '''\n### 网络变化事件 + 60 秒兜底\n\n在使用 NetworkManager 的 Linux 系统上，安装器会自动安装 dispatcher。`up`、DHCP 租约变化、NetworkManager connectivity 状态变化和 `reapply` 等事件会重置一个 2 秒防抖 timer，随后触发与周期巡检相同的 `bjut-auto-login.service`。事件触发只在 `bjut-auto-login.timer` 已启用时生效，因此不会绕过原有的自动登录开关。\n\nPortal 静默下线通常不会改变网卡、IP 或路由，因此 **60 秒周期 timer 仍保留**。事件检查完成后，周期 timer 会从 service 再次进入 inactive 的时间重新计算下一次约 60 秒兜底检查，从而避免紧挨着重复检查。\n\n没有 NetworkManager 的系统不会安装事件 dispatcher，原有 systemd timer 行为不受影响。\n\n### 推荐使用自有 VPS `/204` 做公网健康检查\n\n现有 `connectivity_url` 已接受任意 HTTP 2xx，因此 VPS 返回 `204 No Content` 时无需下载正文。推荐配置：\n\n```ini\nconnectivity_url = https://check.example.com/204\nconnectivity_resolve_ip = 203.0.113.10\n```\n\n`connectivity_resolve_ip` 可留空。填写后程序通过 curl `--resolve` 直接连接指定 IP，同时 URL 主机名、TLS SNI 和证书验证仍保持不变。Nginx 可使用如下极简端点：\n\n```nginx\nlocation = /204 {\n    access_log off;\n    return 204;\n}\n```\n'''
+          if detail not in s:
+              if marker not in s:
+                  raise SystemExit('README install marker not found')
+              s = s.replace(marker, marker + detail, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
+          chmod +x NetworkManager/dispatcher.d/90-bjut-auto-login
+
+      - name: Validate v0.4.0
+        shell: bash
+        run: |
+          python3 -m py_compile bjut_auth.py
+          python3 -m unittest discover -s tests -v
+          bash -n install.sh uninstall.sh NetworkManager/dispatcher.d/90-bjut-auto-login
+          grep -q '^OnUnitInactiveSec=60s$' systemd/bjut-auto-login.timer
+          grep -q '^OnActiveSec=2s$' systemd/bjut-auto-login-event.timer
+          grep -q '^RemainAfterElapse=no$' systemd/bjut-auto-login-event.timer
+          grep -q 'restart --no-block bjut-auto-login-event.timer' NetworkManager/dispatcher.d/90-bjut-auto-login
+          grep -q 'connectivity_resolve_ip' config.example.ini
+
+      - name: Commit release and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/one-shot-v040-network-events.yml
+          git add bjut_auth.py config.example.ini install.sh uninstall.sh README.md \
+            systemd/bjut-auto-login-event.timer NetworkManager/dispatcher.d/90-bjut-auto-login \
+            tests/test_version.py tests/test_network_events.py tests/test_connectivity_health.py
+          git commit -m "Add event-driven network recovery"
+          git push origin HEAD:main
