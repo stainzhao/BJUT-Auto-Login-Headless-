@@ -2,6 +2,9 @@
 Description=Check BJUT campus network login periodically
 
 [Timer]
+# First check is anchored to timer activation; later checks are anchored to
+# completion/inactivation of the oneshot service so manual service starts do
+# not leave a re-enabled timer in active (elapsed) / Trigger: n/a state.
 OnActiveSec=20s
 OnUnitInactiveSec=60s
 AccuracySec=10s
