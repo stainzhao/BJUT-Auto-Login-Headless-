@@ -1,0 +1,90 @@
+name: one-shot-timer-v034-fix
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Apply timer scheduling fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Release version.
+          auth = Path('bjut_auth.py')
+          text = auth.read_text(encoding='utf-8')
+          if 'VERSION = "0.3.3"' not in text:
+              raise SystemExit('expected version 0.3.3 not found')
+          auth.write_text(text.replace('VERSION = "0.3.3"', 'VERSION = "0.3.4"', 1), encoding='utf-8')
+
+          # Timer: anchor the first run to timer activation and each subsequent
+          # run to completion/inactivation of the oneshot service. This avoids
+          # active(elapsed)/Trigger=n/a after the service was started manually
+          # before the timer was (re)enabled.
+          timer = Path('systemd/bjut-auto-login.timer')
+          old = timer.read_text(encoding='utf-8')
+          expected = '''[Unit]\nDescription=Check BJUT campus network login periodically\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec=60s\nAccuracySec=10s\nRandomizedDelaySec=5s\nPersistent=true\nUnit=bjut-auto-login.service\n\n[Install]\nWantedBy=timers.target\n'''
+          new = '''[Unit]\nDescription=Check BJUT campus network login periodically\n\n[Timer]\nOnActiveSec=20s\nOnUnitInactiveSec=60s\nAccuracySec=10s\nRandomizedDelaySec=5s\nUnit=bjut-auto-login.service\n\n[Install]\nWantedBy=timers.target\n'''
+          if old != expected:
+              raise SystemExit('timer unit no longer matches expected 0.3.3 content')
+          timer.write_text(new, encoding='utf-8')
+
+          # README version + timer semantics / troubleshooting.
+          readme = Path('README.md')
+          doc = readme.read_text(encoding='utf-8').replace('0.3.3', '0.3.4')
+          feature = '- systemd timer 周期巡检和掉线恢复\n'
+          detail = '- timer 使用 `OnActiveSec + OnUnitInactiveSec`，即使手动运行过 service 或重新启用 timer，也会重新建立下一次触发时间\n'
+          if detail not in doc:
+              if feature not in doc:
+                  raise SystemExit('README timer feature anchor not found')
+              doc = doc.replace(feature, feature + detail, 1)
+
+          old_timer_note = '默认约每 60 秒检查一次。\n'
+          new_timer_note = '''首次启用或重启 timer 后约 20 秒执行第一次检查；之后每次 oneshot service 执行完毕约 60 秒后再次检查（另有少量 `AccuracySec` / `RandomizedDelaySec` 调度抖动）。\n\n当前版本使用：\n\n```ini\nOnActiveSec=20s\nOnUnitInactiveSec=60s\n```\n\n因此即使之前手动执行过 `bjut-auto-login.service`，或者先停用再重新启用 timer，也会从 timer 当前激活时间重新建立首个 deadline。\n\n正常状态必须有未来触发时间，例如：\n\n```text\nActive: active (waiting)\nTrigger: Sat 2026-08-15 18:10:xx CST\n```\n\n如果看到：\n\n```text\nActive: active (elapsed)\nTrigger: n/a\n```\n\n说明 timer 当前没有未来 deadline，不属于正常巡检状态。升级到 0.3.4 后重新执行 `sudo ./install.sh`；安装器会对已运行的 timer 执行 restart，使新调度规则立即生效。\n'''
+          if old_timer_note not in doc:
+              raise SystemExit('README timer interval anchor not found')
+          doc = doc.replace(old_timer_note, new_timer_note, 1)
+
+          old_test = '- `doctor` 配置凭据不会被临时环境变量掩盖\n'
+          new_test = old_test + '- systemd timer 使用 `OnActiveSec + OnUnitInactiveSec`，并禁止回归到 `OnUnitActiveSec` / `Persistent=true`\n'
+          if new_test not in doc:
+              if old_test not in doc:
+                  raise SystemExit('README test coverage anchor not found')
+              doc = doc.replace(old_test, new_test, 1)
+          readme.write_text(doc, encoding='utf-8')
+
+          # Regression test for the exact scheduling bug observed in production.
+          test = Path('tests/test_systemd_timer.py')
+          test.write_text('''import unittest\nfrom pathlib import Path\n\n\nROOT = Path(__file__).resolve().parents[1]\nTIMER = ROOT / "systemd" / "bjut-auto-login.timer"\n\n\nclass SystemdTimerTests(unittest.TestCase):\n    @classmethod\n    def setUpClass(cls):\n        cls.text = TIMER.read_text(encoding="utf-8")\n\n    def test_timer_has_restart_safe_monotonic_schedule(self):\n        self.assertIn("OnActiveSec=20s", self.text)\n        self.assertIn("OnUnitInactiveSec=60s", self.text)\n\n    def test_timer_does_not_use_service_last_activation_as_only_repeat_anchor(self):\n        self.assertNotIn("OnUnitActiveSec=", self.text)\n        self.assertNotIn("OnBootSec=", self.text)\n\n    def test_persistent_not_used_for_monotonic_timer(self):\n        self.assertNotIn("Persistent=", self.text)\n\n    def test_timer_targets_expected_service(self):\n        self.assertIn("Unit=bjut-auto-login.service", self.text)\n        self.assertIn("WantedBy=timers.target", self.text)\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
+          PY
+
+      - name: Validate release
+        run: |
+          python3 -m py_compile bjut_auth.py
+          python3 -m unittest discover -s tests -v
+          bash -n install.sh uninstall.sh
+          grep -q '^OnActiveSec=20s$' systemd/bjut-auto-login.timer
+          grep -q '^OnUnitInactiveSec=60s$' systemd/bjut-auto-login.timer
+          ! grep -q '^OnUnitActiveSec=' systemd/bjut-auto-login.timer
+          ! grep -q '^Persistent=' systemd/bjut-auto-login.timer
+
+      - name: Commit final release and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/timer-v034-fix.yml
+          git add bjut_auth.py systemd/bjut-auto-login.timer tests/test_systemd_timer.py README.md
+          git commit -m "Fix systemd timer restart scheduling"
+          git push origin HEAD:main
