@@ -51,7 +51,7 @@ LGN_PAGE_INDEX = "cHAmjX1755497856"
 LGN_JS_VERSION = "4.2.2"
 EPORTAL_XOR_KEY = 0x16
 
-DEFAULT_CONNECTIVITY_URL = "https://www.baidu.com/"
+DEFAULT_CONNECTIVITY_URL = "http://connect.rom.miui.com/generate_204"
 VIRTUAL_PREFIXES = ("wg", "tun", "tap", "tailscale", "zt", "docker", "br-", "veth", "virbr")
 SENSITIVE_QUERY_KEYS = ("user_password", "upass", "DDDDD", "user_account")
 TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
