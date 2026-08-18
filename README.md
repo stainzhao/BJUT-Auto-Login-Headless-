@@ -1,69 +1,54 @@
 # BJUT Auto Login (Headless)
 
-## 致谢 / Acknowledgements
+面向北京工业大学（BJUT）校园网的 Linux 无界面自动认证工具，适用于服务器、工作站、NAS 以及其他 Headless Linux 环境。
 
-本项目能够完成，特别感谢以下项目及其作者：
-
-- **[key-zhzr/BJUT-Auto-Login](https://github.com/key-zhzr/BJUT-Auto-Login)**：本项目对 2026 年现行 BJUT Portal 的端点、请求参数、Type 3 加密认证流程，以及校园固定地址兼容策略的实现主要参考该项目。原项目采用 MIT License。
-- **[sw1128/bjut_auth_linux](https://github.com/sw1128/bjut_auth_linux)**：较早的 BJUT Linux 校园网一键认证实现，为本项目理解旧版 Linux 无界面认证流程、Type 1 / Type 2 兼容方式提供了重要参考。
-
-感谢上述作者将相关研究和实现公开分享，使本项目能够在此基础上进一步面向 **Headless Linux / systemd / 多网口服务器 / 无人值守自动恢复** 场景进行独立整理、实现和完善。
-
-> 本项目不是上述项目的官方版本或附属项目。第三方许可与归属说明见 [`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES)。
-
----
-
-北京工业大学校园网无 UI 自动认证工具，面向 Linux 服务器、工作站、NAS 和其他无桌面环境。
-
-项目目标很简单：**不运行 GUI，不依赖浏览器，在校园网认证失效后自动恢复联网。**
+项目目标：**无需 GUI 或浏览器，在校园网认证失效后自动检测并恢复联网。**
 
 当前版本：`0.4.0`
 
-> Type 3（BJUT 有线 `lgn`）已经在真实服务器环境完成“认证失效 → systemd timer 检测离线 → 自动重新认证 → `status=online`”闭环验证。
->
-> Type 1 / Type 2 已按 2026 年现行 Portal 实现对齐，但仍建议在对应网络环境首次部署时执行一次人工验证。
+> Type 3（BJUT 有线 `lgn`）已完成实机自动重连流程验证。Type 1 / Type 2 已按当前 Portal 协议实现，建议首次部署时在对应网络环境执行一次人工验证。
 
 ---
 
-## 功能
+## 功能特性
 
-- Type 1：宿舍网 `10.21.221.98` ePortal
-- Type 2：`bjut_wifi` / `wlgn.bjut.edu.cn`
-- Type 3：有线 `lgn.bjut.edu.cn` 新版加密 ePortal
-- `auto` 自动判断认证类型
+- 支持 Type 1：宿舍网 ePortal
+- 支持 Type 2：`bjut_wifi` / `wlgn.bjut.edu.cn`
+- 支持 Type 3：有线 `lgn.bjut.edu.cn` 加密 ePortal
+- 支持 `auto` 自动判断认证类型
 - 自动识别校园网物理接口
 - 支持双网口 / 多网口服务器
-- default route 暂时消失时仍可继续识别候选校园接口
-- 认证请求通过 `curl --interface` 绑定到选定接口
-- 排除明显的 WireGuard / TUN / Tailscale / Docker 等虚拟接口
-- Type 3 登录参数按现行 Portal 算法加密
-- Portal DNS 解析、连接、TLS 或瞬时 5xx 异常时进行受控回退
-- `lgn6.bjut.edu.cn` / `lgn.bjut.edu.cn` 固定地址回退仍保留原 HTTPS 主机名和 SNI
-- Type 3 `getipv6` 正常请求保留系统原生地址族选择；`result != 1` 时继续尝试 `.2` / `.10` 两个校园端点
+- default route 暂时消失时仍可识别候选校园接口
+- Portal 请求通过 `curl --interface` 绑定到选定物理接口
+- 排除 WireGuard / TUN / Tailscale / Docker 等常见虚拟接口
+- Type 3 登录参数按当前 Portal 算法加密
+- Portal DNS、连接、TLS 或瞬时 HTTP 5xx 异常时进行受控回退
 - `doctor` 部署前自检
 - `status` 公网状态检测
-- `ensure`：在线跳过，离线登录
-- `ensure` 以最终公网状态为成功判据；Portal 5xx/超时但认证已生效时避免 systemd 假失败
-- systemd timer 周期巡检和掉线恢复
-- timer 使用 `OnActiveSec + OnUnitInactiveSec`，即使手动运行过 service 或重新启用 timer，也会重新建立下一次触发时间
-- NetworkManager 网络变化事件可立即触发检查；2 秒防抖后复用同一个 `bjut-auto-login.service`，无额外常驻轮询进程
-- 60 秒 timer 继续作为 Portal 静默掉线的兜底检测
-- 公网健康检查支持可选 `connectivity_resolve_ip`，可将自有 VPS `/204` 域名固定到 IP，绕过 DNS 但保留 HTTPS SNI/证书校验
-- 配置文件安全检查
-- GitHub Actions 单元测试
+- `ensure` 在线跳过、离线自动认证
+- Portal 返回异常但公网已实际恢复时，以最终公网状态作为 `ensure` 成功判据
+- systemd timer 周期巡检和自动掉线恢复
+- NetworkManager 网络变化事件即时触发检测
+- 2 秒事件防抖，无额外常驻轮询进程
+- 60 秒周期 timer 作为 Portal 静默掉线兜底
+- 可自定义公网连通性检测地址
+- 可选 `connectivity_resolve_ip` 固定健康检查域名到指定 IP
+- 配置文件权限检查与敏感信息保护
+- GitHub Actions 多版本测试
 
-项目本身**不写独立日志文件**。systemd 部署时，stdout/stderr 由 `journald` 接管。
+项目本身**不会创建独立日志文件**。systemd 部署时 stdout / stderr 由 `journald` 接管。
 
 ---
 
-# 1. 依赖
+## 1. 系统要求
 
 ```text
 Linux
 Python >= 3.8
 curl
 iproute2
-systemd     # 仅自动重连需要
+systemd          # 自动重连需要
+NetworkManager   # 可选，用于网络变化事件触发
 ```
 
 Ubuntu / Debian：
@@ -75,7 +60,7 @@ sudo apt install -y python3 curl iproute2
 
 ---
 
-# 2. 快速部署
+## 2. 安装
 
 ```bash
 git clone https://github.com/stainzhao/BJUT-Auto-Login-Headless-.git
@@ -83,13 +68,13 @@ cd BJUT-Auto-Login-Headless-
 sudo ./install.sh
 ```
 
-如果当前系统不是 systemd，只安装 CLI：
+如果系统不使用 systemd，只安装 CLI：
 
 ```bash
 sudo ./install.sh --no-systemd
 ```
 
-安装后：
+默认安装位置：
 
 ```text
 /usr/local/bin/bjut-auth
@@ -98,32 +83,94 @@ sudo ./install.sh --no-systemd
 /etc/systemd/system/bjut-auto-login.timer
 ```
 
-`install.sh` 可重复执行用于升级。已有 `/etc/bjut-auto-login.conf` 不会被覆盖。
+如果系统运行 NetworkManager，还会安装网络事件 dispatcher 和对应的防抖 timer。
 
-### 网络变化事件 + 60 秒兜底
+`install.sh` 可以重复执行用于升级。已有 `/etc/bjut-auto-login.conf` 不会被覆盖。
 
-在使用 NetworkManager 的 Linux 系统上，安装器会自动安装 dispatcher。`up`、DHCP 租约变化、NetworkManager connectivity 状态变化和 `reapply` 等事件会重置一个 2 秒防抖 timer，随后触发与周期巡检相同的 `bjut-auto-login.service`。事件触发只在 `bjut-auto-login.timer` 已启用时生效，因此不会绕过原有的自动登录开关。
+---
 
-Portal 静默下线通常不会改变网卡、IP 或路由，因此 **60 秒周期 timer 仍保留**。事件检查完成后，周期 timer 会从 service 再次进入 inactive 的时间重新计算下一次约 60 秒兜底检查，从而避免紧挨着重复检查。
+## 3. 配置
 
-没有 NetworkManager 的系统不会安装事件 dispatcher，原有 systemd timer 行为不受影响。
+编辑配置文件：
 
-### 公网健康检查
+```bash
+sudo nano /etc/bjut-auto-login.conf
+```
 
-默认使用小米的轻量 HTTP 204 探测地址：
+通用示例：
+
+```ini
+[BJUT]
+username = <campus_username>
+password = <campus_password>
+
+# auto / 1 / 2 / 3
+type = auto
+
+# 推荐先留空，由程序自动判断。
+# 自动判断失败时再填写实际校园网物理接口，例如 eno1 / enp3s0 / wlan0。
+interface =
+
+# Type 1 / Type 2 HTTPS 失败时是否允许使用 HTTP。
+# 默认关闭，仅在可信校园网络且确有需要时启用。
+allow_http_fallback = false
+
+# 用于判断公网是否真正可用。
+connectivity_url = http://connect.rom.miui.com/generate_204
+
+# 可选。用于把 connectivity_url 中的域名固定到指定 IP。
+# 留空时使用系统 DNS。
+connectivity_resolve_ip =
+```
+
+配置权限必须限制为仅 root 可读写：
+
+```bash
+sudo chown root:root /etc/bjut-auto-login.conf
+sudo chmod 600 /etc/bjut-auto-login.conf
+```
+
+**不要把真实校园网账号或密码提交到 Git、Issue、PR 或日志。**
+
+### 配置校验
+
+程序会主动拒绝以下常见错误：
+
+- 显式指定但不存在的配置文件
+- 未知配置字段
+- 非 `auto / 1 / 2 / 3` 的认证类型
+- 无效布尔值
+- 非 HTTP / HTTPS 的 `connectivity_url`
+- `connectivity_url` 中包含用户名或密码
+- 示例占位密码
+- 明显的虚拟接口
+
+密码中的 `%` 按字面量处理，不会被 `ConfigParser` 插值。
+
+---
+
+## 4. 公网健康检查
+
+默认配置使用轻量 204 探测地址：
 
 ```ini
 connectivity_url = http://connect.rom.miui.com/generate_204
 ```
 
-该端点正常联网时返回 `204 No Content`，无需下载网页正文。`connectivity_url` 接受任意 HTTP 2xx，因此也可以替换为自己的 VPS `/204`：
+正常联网时该地址返回 `204 No Content`，不需要下载网页正文。
+
+也可以使用其他稳定的 HTTP / HTTPS 2xx 地址，例如自建健康检查服务：
 
 ```ini
 connectivity_url = https://check.example.com/204
-connectivity_resolve_ip = 203.0.113.10
+connectivity_resolve_ip = 192.0.2.10
 ```
 
-`connectivity_resolve_ip` 可留空。填写后程序通过 curl `--resolve` 直接连接指定 IP，同时 URL 主机名、TLS SNI 和证书验证仍保持不变。Nginx 可使用如下极简端点：
+其中 `192.0.2.10` 为文档示例地址，请替换为实际服务器地址。
+
+填写 `connectivity_resolve_ip` 后，程序使用 curl `--resolve` 直接连接指定 IP，同时保留 URL 主机名、TLS SNI 和证书校验。
+
+一个最简单的 Nginx 204 端点可以写成：
 
 ```nginx
 location = /204 {
@@ -134,95 +181,51 @@ location = /204 {
 
 ---
 
-# 3. 配置
+## 5. 自动选择网卡
 
-编辑：
+单网口设备通常无需设置 `interface`。
+
+多网口环境会按以下顺序综合判断：
+
+1. 显式设置的 `--interface` 或配置文件 `interface`
+2. 唯一可用的非虚拟 IPv4 接口
+3. BJUT Portal 地址的实际路由及源 IPv4
+4. BJUT 校园 IPv4 地址特征
+5. 无凭据 Portal 探测
+6. 如果仍然存在多个无法区分的候选接口，则安全报错
+
+示例拓扑：
+
+```text
+enp3s0      -> BJUT 校园网
+enp4s0      -> 管理网 / 内网
+wg0         -> WireGuard
+tailscale0  -> Tailscale
+```
+
+如果已明确知道校园网接口，可以直接固定：
+
+```ini
+interface = enp3s0
+```
+
+查看 Type 3 Portal 的实际路由：
 
 ```bash
-sudo nano /etc/bjut-auto-login.conf
+ip -4 route get 172.30.201.2
 ```
 
 示例：
 
-```ini
-[BJUT]
-username = 25000000
-password = change_me
-
-# auto / 1 / 2 / 3
-type = auto
-
-# 推荐先留空，让程序自动判断。
-# 双网口环境若仍无法唯一判断，可显式写 enp7s0 / eno1 / wlan0 等。
-interface =
-
-# 默认关闭。
-# 只有 Type 1 / Type 2 HTTPS 无法使用且确认校园网可信时才开启。
-allow_http_fallback = false
-
-# 用于确认是否真正访问公网。
-connectivity_url = http://connect.rom.miui.com/generate_204
-```
-
-配置权限必须收紧：
-
-```bash
-sudo chown root:root /etc/bjut-auto-login.conf
-sudo chmod 600 /etc/bjut-auto-login.conf
-```
-
-不要把真实账号密码提交到 Git。
-
-## 配置校验
-
-程序会主动拒绝：
-
-- 不存在的显式 `--config`
-- 未知配置字段
-- `type` 非 `auto/1/2/3`
-- 拼错的布尔值，例如 `flase`
-- 非 `http/https` 的 `connectivity_url`
-- 带用户名或密码的 `connectivity_url`
-- 示例密码 `change_me`
-- 明显的虚拟接口
-
-密码中的 `%` 会按字面量处理，不会被 `ConfigParser` 插值。
-
----
-
-# 4. 自动选网卡逻辑
-
-单网口机器通常无需配置 `interface`。
-
-多网口服务器按以下信息综合判断：
-
-1. 如果用户显式设置 `--interface` 或配置 `interface = ...`，始终优先。
-2. 如果只有一个具有可用 IPv4 的非虚拟接口，直接使用。
-3. 检查到 BJUT Portal 地址的实际路由及其源 IPv4。
-4. default route 暂时消失时，使用现行 BJUT 校园 IPv4 地址族作为保守 fallback。
-5. 多个候选仍无法区分时，对候选接口执行无凭据 Portal 探测。
-6. 仍然歧义时**安全报错**，而不是随机选网卡。
-
-这主要解决以下情况：
-
 ```text
-enp7s0 -> BJUT 校园网
-enp8s0 -> 管理网 / 内网 / 第二条外网
-wg0    -> WireGuard
-tailscale0 -> Tailscale
+172.30.201.2 via <gateway> dev enp3s0 src <campus_ipv4>
 ```
 
-以及认证失效后主路由暂时消失的情况。
-
-如果你已经明确知道校园网口，固定接口最确定：
-
-```ini
-interface = enp7s0
-```
+其中 `dev` 对应出口接口，`src` 对应实际源 IPv4。
 
 ---
 
-# 5. 部署前自检
+## 6. 部署前自检
 
 运行：
 
@@ -230,38 +233,38 @@ interface = enp7s0
 sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 ```
 
-正常输出类似：
+正常输出形式类似：
 
 ```text
 BJUT Auto Login 0.4.0
-python: 3.12.3
+python: 3.x.x
 curl: OK (/usr/bin/curl)
 ip: OK (/usr/sbin/ip)
 config: /etc/bjut-auto-login.conf
 config-security: OK
 credentials: configured (config)
-interfaces: enp7s0=172.19.26.49
-interface: enp7s0 (wired)
-ipv4: 172.19.26.49
+interfaces: enp3s0=<campus_ipv4>
+interface: enp3s0 (wired)
+ipv4: <campus_ipv4>
 internet: online
 portal: type 3
 ```
 
-注意：
+说明：
 
-- `internet: offline` 在尚未认证时**可以是正常的**。
-- `portal: ERROR (...)` 会让 `doctor` 返回非零退出码。
-- 凭据缺失或仍为示例值也会让 `doctor` 失败。
-- 配置权限过宽会被视为部署问题。
+- 尚未认证时出现 `internet: offline` 可以是正常现象。
+- `portal: ERROR (...)` 会使 `doctor` 返回非零退出码。
+- 凭据缺失或仍为示例值会使检查失败。
+- 配置文件权限过宽会被视为安全问题。
 
-检查退出码：
+查看退出码：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 echo $?
 ```
 
-成功应为：
+成功时应为：
 
 ```text
 0
@@ -269,7 +272,7 @@ echo $?
 
 ---
 
-# 6. 首次认证验证
+## 7. 首次认证验证
 
 运行：
 
@@ -277,37 +280,39 @@ echo $?
 sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
 ```
 
-如果已经在线：
+已经在线时：
 
 ```text
-online: interface=enp7s0, skip login
+online: interface=<interface>, skip login
 ```
 
-如果当前未认证，成功时类似：
+未认证并成功登录时：
 
 ```text
-type=3 interface=enp7s0: Portal协议认证成功！
+type=<type> interface=<interface>: Portal协议认证成功！
 ```
 
-然后：
+随后检查公网：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf status
 ```
 
-成功：
+正常结果：
 
 ```text
 online
 ```
 
-`ensure` 即使当前在线，也会先确认已经配置有效凭据，避免“部署时在线，但真正掉线后才发现密码仍是 `change_me`”这种假成功。
+`ensure` 即使在当前已经在线时，也会先确认自动重连所需凭据有效，避免真正掉线后才发现配置不完整。
 
 ---
 
-# 7. 启用自动重连
+## 8. 自动重连机制
 
-只有 `doctor` 和 `ensure` 验证通过后再启用：
+### 8.1 周期兜底
+
+验证 `doctor` 和 `ensure` 后启用：
 
 ```bash
 sudo systemctl enable --now bjut-auto-login.timer
@@ -320,102 +325,147 @@ systemctl is-enabled bjut-auto-login.timer
 systemctl is-active bjut-auto-login.timer
 ```
 
-期望：
+正常应为：
 
 ```text
 enabled
 active
 ```
 
-查看详细状态：
-
-```bash
-systemctl status bjut-auto-login.timer --no-pager
-```
-
-正常：
-
-```text
-Active: active (waiting)
-```
-
-首次启用或重启 timer 后约 20 秒执行第一次检查；之后每次 oneshot service 执行完毕约 60 秒后再次检查（另有少量 `AccuracySec` / `RandomizedDelaySec` 调度抖动）。
-
-当前版本使用：
+当前 timer 核心调度：
 
 ```ini
 OnActiveSec=20s
 OnUnitInactiveSec=60s
 ```
 
-因此即使之前手动执行过 `bjut-auto-login.service`，或者先停用再重新启用 timer，也会从 timer 当前激活时间重新建立首个 deadline。
+含义：
 
-正常状态必须有未来触发时间，例如：
+- timer 首次启用或重启后，约 20 秒执行第一次检查；
+- 每次 `bjut-auto-login.service` 执行结束后，约 60 秒执行下一次兜底检查；
+- `AccuracySec` / `RandomizedDelaySec` 会带来少量正常调度抖动。
+
+查看状态：
+
+```bash
+systemctl status bjut-auto-login.timer --no-pager
+```
+
+正常应显示：
 
 ```text
 Active: active (waiting)
-Trigger: Sat 2026-08-15 18:10:xx CST
 ```
 
-如果看到：
+并存在未来的 `Trigger` 时间。
+
+### 8.2 网络变化事件即时检测
+
+在 NetworkManager 系统上，安装器会安装 dispatcher。
+
+以下类型的网络事件会触发检查：
 
 ```text
-Active: active (elapsed)
-Trigger: n/a
+up
+dhcp4-change
+dhcp6-change
+connectivity-change
+reapply
 ```
 
-说明 timer 当前没有未来 deadline，不属于正常巡检状态。升级到 0.3.4 后重新执行 `sudo ./install.sh`；安装器会对已运行的 timer 执行 restart，使新调度规则立即生效。
+连续事件先经过约 2 秒防抖，然后触发与周期巡检相同的：
+
+```text
+bjut-auto-login.service
+```
+
+明显的 WireGuard、TUN、Tailscale、Docker 等虚拟接口事件会被忽略。
+
+事件触发仅在 `bjut-auto-login.timer` 已启用时生效，因此关闭周期 timer 也等价于关闭自动登录机制。
+
+### 8.3 为什么仍保留 60 秒 timer
+
+Portal 认证会话失效时，可能出现：
+
+```text
+物理网卡仍然 UP
+IPv4 / IPv6 未变化
+路由未变化
+DNS 未变化
+但公网已经不可访问
+```
+
+这种“静默掉线”通常不会产生系统网络变化事件，因此需要周期 timer 作为兜底。
+
+最终逻辑为：
+
+```text
+网络变化事件
+    ↓
+约 2 秒防抖
+    ↓
+立即 ensure
+
+        +
+
+约 60 秒周期兜底
+    ↓
+ensure
+    ↓
+公网正常 -> 跳过登录
+公网异常 -> Portal 认证 -> 再次确认公网
+```
+
+没有 NetworkManager 的系统仍可正常使用 systemd timer，不受影响。
 
 ---
 
-# 8. systemd 状态说明
+## 9. systemd 状态说明
 
-`bjut-auto-login.service` 是：
+`bjut-auto-login.service` 使用：
 
 ```ini
 Type=oneshot
 ```
 
-因此执行完后：
+所以每次执行完成后：
 
 ```text
 Active: inactive (dead)
 ```
 
-**是正常状态。**
+**这是正常状态。**
 
-正确判断是否启用自动认证，应看 timer：
+自动认证是否启用，应查看：
 
 ```bash
 systemctl status bjut-auto-login.timer
 ```
 
-在线时典型日志：
+在线时日志类似：
 
 ```text
 Starting bjut-auto-login.service...
-online: interface=enp7s0, skip login
+online: interface=<interface>, skip login
 bjut-auto-login.service: Deactivated successfully.
 Finished bjut-auto-login.service.
 ```
 
-真实掉认证后成功恢复时：
+掉线恢复成功时类似：
 
 ```text
-type=3 interface=enp7s0: Portal协议认证成功！
+type=<type> interface=<interface>: Portal协议认证成功！
 ```
 
-部分 Portal 节点可能已经完成认证，却在响应阶段返回 HTTP 5xx。`ensure` 会短暂复核最终公网状态；如果公网已经恢复，会保留 warning 但仍让 systemd 正常成功退出：
+部分 Portal 节点可能已经完成认证，但响应阶段返回 HTTP 5xx 或超时。`ensure` 会短暂复核最终公网状态；如果公网已经恢复，会保留 warning，但 systemd 仍按成功处理：
 
 ```text
 warning: Portal 认证过程异常（HTTP 500...），但公网已恢复，视为认证成功
-bjut-auto-login.service: Deactivated successfully.
-Finished bjut-auto-login.service.
 ```
 
 ---
 
-# 9. 日志
+## 10. 日志
 
 查看最近日志：
 
@@ -429,19 +479,19 @@ journalctl -u bjut-auto-login.service -n 50 --no-pager
 journalctl -fu bjut-auto-login.service
 ```
 
-查看 journal 总磁盘占用：
+查看 journal 磁盘占用：
 
 ```bash
 journalctl --disk-usage
 ```
 
-本项目没有自己的日志文件，也不会创建持续增长的 `.log` 文件。
+本项目不会创建持续增长的独立 `.log` 文件。
 
 ---
 
-# 10. 瞬时网络与 DNS 错误
+## 11. Portal、DNS 与瞬时网络错误
 
-服务器开机、DHCP 更新、IPv6 尚未完全就绪、校园 DNS 暂时异常或 Portal 短时异常时，可能遇到：
+开机、DHCP 更新、IPv6 尚未完全就绪、校园 DNS 暂时异常或 Portal 短时异常时，可能看到：
 
 ```text
 curl: (6) Could not resolve host: lgn6.bjut.edu.cn
@@ -451,7 +501,11 @@ HTTP 503
 HTTP 504
 ```
 
-当前版本首先按正常 DNS 访问 Portal。Type 3 的 `getipv6` 地址发现会保留系统原生地址族选择；若正常请求失败或返回 `result != 1`，会继续尝试受控固定地址。其他 BJUT Portal 域名仅在 DNS、连接、TLS、超时或瞬时 5xx 错误时使用固定地址回退：
+程序首先按正常 DNS 访问 Portal。
+
+Type 3 `getipv6` 地址发现保留系统原生地址族选择；正常请求失败或返回无效结果时，会继续尝试受控固定地址。
+
+已知 Portal 固定地址回退：
 
 ```text
 lgn6.bjut.edu.cn:443 -> 172.30.201.2 / 172.30.201.10
@@ -459,27 +513,27 @@ lgn.bjut.edu.cn:802  -> 172.30.201.2 / 172.30.201.10
 wlgn.bjut.edu.cn:443 -> 10.21.251.3
 ```
 
-实现使用 `curl --resolve`，因此 URL 中仍然是 `lgn6.bjut.edu.cn` / `lgn.bjut.edu.cn`，HTTPS 主机名、SNI 和证书校验不会因为回退到固定 IPv4 而被替换成裸 IP。
+实现使用 `curl --resolve`，因此 HTTPS 主机名、SNI 和证书校验仍保持原域名。
 
-固定地址回退只允许上述白名单 Portal；不会对普通互联网域名使用。
+固定地址回退仅用于内置 BJUT Portal 白名单，不会应用到普通互联网域名。
 
-如果本轮所有有限尝试仍失败，systemd timer 会在下一轮继续检查，不会在单次进程里无限循环。
+单次执行采用有限重试，不会在一个进程中无限循环。若瞬时故障仍未恢复，systemd timer 会在下一轮继续检查。
 
 永久配置错误不会被无限掩盖，例如：
 
 ```text
 配置文件不存在
-密码仍是 change_me
+凭据仍为示例值
 存在多个无法区分的候选网卡
 Portal 无法确认
-认证网关明确拒绝账号密码
+认证网关明确拒绝账号或密码
 ```
 
 ---
 
-# 11. 常用命令
+## 12. 常用命令
 
-版本：
+查看版本：
 
 ```bash
 bjut-auth --version
@@ -497,31 +551,31 @@ sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 sudo bjut-auth --config /etc/bjut-auto-login.conf detect
 ```
 
-公网状态：
+检查公网状态：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf status
 ```
 
-主动登录：
+执行一次登录：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf login
 ```
 
-自动逻辑：
+执行自动逻辑：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
 ```
 
-固定接口：
+指定接口：
 
 ```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf --interface enp7s0 doctor
+sudo bjut-auth --config /etc/bjut-auto-login.conf --interface enp3s0 doctor
 ```
 
-固定 Type 3：
+指定 Type 3：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf --type 3 login
@@ -529,7 +583,7 @@ sudo bjut-auth --config /etc/bjut-auto-login.conf --type 3 login
 
 ---
 
-# 12. 更新
+## 13. 更新
 
 ```bash
 cd BJUT-Auto-Login-Headless-
@@ -537,25 +591,18 @@ git pull --ff-only
 sudo ./install.sh
 ```
 
-如果本地目录仍叫旧名称，例如：
+如果 timer 已经运行，安装器会重新加载 systemd unit，并使新的调度规则生效。
 
-```text
-~/auto_login
-```
-
-目录名不影响：
+更新后建议确认：
 
 ```bash
-cd ~/auto_login
-git pull --ff-only
-sudo ./install.sh
+bjut-auth --version
+systemctl status bjut-auto-login.timer --no-pager
 ```
-
-已经运行的 timer 会在安装后重新加载新的 unit 定义。
 
 ---
 
-# 13. 卸载
+## 14. 卸载
 
 保留账号配置：
 
@@ -563,7 +610,7 @@ sudo ./install.sh
 sudo ./uninstall.sh
 ```
 
-连配置一起删除：
+同时删除配置：
 
 ```bash
 sudo ./uninstall.sh --purge
@@ -573,267 +620,72 @@ sudo ./uninstall.sh --purge
 
 ---
 
-# 14. AI Agent / Codex 自动部署协议
+## 15. 双网口与远程服务器排障
 
-如果 Agent 负责在新服务器部署本项目，按以下顺序执行。
-
-## A. 前置条件
-
-Agent 必须确认：
-
-- Linux
-- root / sudo 可用
-- 用户已提供 BJUT 凭据，或凭据已安全存在目标机
-- 不把密码写进 Git / PR / Issue / 最终汇报
-- 不通过 `-p/--password` 长期保存密码
-- 如果当前 SSH 依赖校园网，不主动执行断网、改 MAC、删路由等危险测试
-
-## B. 获取代码
-
-新部署：
-
-```bash
-git clone https://github.com/stainzhao/BJUT-Auto-Login-Headless-.git
-cd BJUT-Auto-Login-Headless-
-```
-
-已有部署：
-
-```bash
-git pull --ff-only
-```
-
-## C. 安装
-
-systemd Linux：
-
-```bash
-sudo ./install.sh
-```
-
-非 systemd：
-
-```bash
-sudo ./install.sh --no-systemd
-```
-
-## D. 写入配置
-
-目标：
-
-```text
-/etc/bjut-auto-login.conf
-owner: root:root
-mode: 600
-```
-
-默认保持：
-
-```ini
-type = auto
-interface =
-allow_http_fallback = false
-```
-
-Agent 不应仅根据接口名猜 `type`。
-
-如果自动判断唯一失败，Agent 可以根据 `doctor`、`ip -4 addr` 和 `ip -4 route get 172.30.201.2` 的结果确定校园接口，再写入 `interface = ...`。
-
-Agent 不应因为 `lgn6.bjut.edu.cn` 系统 DNS 解析失败而立即修改 `/etc/hosts`；当前版本会在程序内部对已知 BJUT Portal 做固定地址回退。
-
-## E. doctor
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
-```
-
-Agent 只记录非敏感结果：
-
-```text
-version
-Python
-curl/ip
-config security
-credentials configured / error
-candidate interfaces
-selected interface
-IPv4
-internet
-portal type
-```
-
-必须检查退出码。
-
-## F. ensure
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
-```
-
-然后：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf status
-```
-
-必须得到：
-
-```text
-online
-```
-
-## G. timer
-
-仅 systemd：
-
-```bash
-sudo systemctl enable --now bjut-auto-login.timer
-systemctl is-enabled bjut-auto-login.timer
-systemctl is-active bjut-auto-login.timer
-```
-
-必须得到：
-
-```text
-enabled
-active
-```
-
-## H. 最终验收
-
-只有以下条件全部满足，Agent 才能报告部署成功：
-
-```text
-[ ] /usr/local/bin/bjut-auth 存在
-[ ] /etc/bjut-auto-login.conf 存在
-[ ] 配置权限为 600
-[ ] doctor 退出码 = 0
-[ ] credentials = configured
-[ ] 已唯一确定校园网接口
-[ ] 已识别 Portal 类型
-[ ] ensure 退出码 = 0
-[ ] status = online
-[ ] timer = enabled        # systemd 部署
-[ ] timer = active         # systemd 部署
-```
-
-如果部署时机器本来就在线，只能说明“自动巡检链路已部署”。
-
-只有日志确实出现过：
-
-```text
-type=<...> interface=<...>: ...认证成功...
-```
-
-并随后 `status=online`，才能声称已经完成真实掉认证恢复验证。
-
-Agent 最终汇报示例：
-
-```text
-BJUT Auto Login 部署完成
-- version: 0.3.4
-- interface: enp7s0
-- IPv4: 172.x.x.x
-- portal: type 3
-- internet: online
-- timer: enabled / active
-- last ensure: success
-```
-
-严禁输出：
-
-```text
-password
-Cookie
-Token
-完整认证请求 URL
-```
-
----
-
-# 15. 双网口故障排查
-
-查看所有 IPv4：
+查看全局 IPv4：
 
 ```bash
 ip -4 -o addr show scope global
 ```
 
-查看到 Type 3 Portal 的实际路由：
+查看 Type 3 Portal 路由：
 
 ```bash
 ip -4 route get 172.30.201.2
 ```
 
-例如：
-
-```text
-172.30.201.2 via ... dev enp7s0 src 172.19.26.49
-```
-
-这里：
-
-```text
-dev enp7s0
-src 172.19.26.49
-```
-
-通常就是认证所应使用的接口和源 IPv4。
-
-如果自动模式仍无法唯一判断：
+如果自动识别仍无法唯一确定校园接口，可以显式配置：
 
 ```ini
-interface = enp7s0
+interface = enp3s0
 ```
 
-然后：
+然后重新运行：
 
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
 ```
 
-不要为了验证自动登录而远程执行：
+如果当前 SSH 会话依赖校园网，**不要为了测试自动重连而远程关闭正在使用的物理网卡**，例如：
 
 ```bash
-ip link set enp7s0 down
+sudo ip link set <campus_interface> down
 ```
 
-否则可能直接断掉 SSH。
+这可能直接中断远程连接。
 
 ---
 
-# 16. 安全设计
+## 16. 安全设计
 
 - Type 3 使用 HTTPS。
 - Type 1 / Type 2 默认优先 HTTPS。
 - HTTP fallback 默认关闭。
-- Portal 请求不读取系统 HTTP/HTTPS proxy。
-- Portal 请求绑定选定接口。
-- 除 Type 3 `getipv6` 的正常发现请求保留系统原生地址族外，其余 Portal 请求优先使用 IPv4，减少 AAAA / IPv6 路由对物理接口选择的干扰。
-- 固定地址回退仅允许内置 BJUT Portal 白名单，并继续使用原 HTTPS 主机名/SNI。
+- Portal 请求不读取系统 HTTP / HTTPS proxy。
+- Portal 请求绑定选定物理接口。
+- 除 Type 3 `getipv6` 正常发现请求保留系统原生地址族外，其余 Portal 请求优先 IPv4。
+- 固定地址回退仅允许内置 BJUT Portal 白名单，并继续使用原 HTTPS 主机名与 SNI。
 - 含凭据的完整 URL 通过 `curl --config -` 从 stdin 传给 curl，不出现在 curl argv。
-- curl 错误信息会脱敏。
-- 非 2xx Portal 响应只记录 HTTP 状态，不输出响应体，降低敏感信息回显风险。
-- systemd 配置使用 `UMask=0077`、`NoNewPrivileges=true`、`ProtectSystem=strict` 等限制。
-- 配置文件建议仅 root 可读。
+- curl 错误信息会进行敏感字段脱敏。
+- 非 2xx Portal 响应只记录 HTTP 状态，不输出响应体。
+- systemd service 使用 `UMask=0077`、`NoNewPrivileges=true`、`ProtectSystem=strict` 等限制。
+- 配置文件建议只允许 root 读取。
 
 ---
 
-# 17. 协议实现说明
+## 17. Type 3 协议流程
 
-Type 3 当前流程：
+当前流程：
 
 ```text
-确定物理接口和源 IPv4
+确定物理接口与源 IPv4
     ↓
-正常 DNS 请求 lgn6.bjut.edu.cn
-失败时仅对受信 Portal 使用 172.30.201.2 / 172.30.201.10 回退
-    ↓
-GET https://lgn6.bjut.edu.cn/drcom/getipv6
+访问 lgn6.bjut.edu.cn
     ↓
 取得 Portal 观测到的 IPv6
     ↓
-用户名 / 密码 / IPv4 / IPv6 等字段
+准备用户名 / 密码 / IPv4 / IPv6 等字段
+    ↓
 UTF-16 code unit XOR 0x16
     ↓
 hex 编码
@@ -841,67 +693,57 @@ hex 编码
 GET https://lgn.bjut.edu.cn:802/eportal/portal/login
     ↓
 解析 JSONP result
+    ↓
+再次检查公网状态
 ```
 
-Type 1 / Type 2 的参数顺序和重复 `lang=zh-cn` / `lang=zh` 已按当前参考实现对齐。
+正常 DNS 或连接异常时，只对受信 BJUT Portal 使用预设固定地址进行回退。
 
 ---
 
-# 18. 开发与测试
+## 18. 开发与测试
 
 项目没有第三方 Python 包依赖。
 
-运行：
+本地检查：
 
 ```bash
 python3 -m py_compile bjut_auth.py
 python3 -m unittest discover -s tests -v
-bash -n install.sh uninstall.sh
+bash -n install.sh uninstall.sh NetworkManager/dispatcher.d/90-bjut-auto-login
 ```
 
-测试覆盖：
+测试覆盖包括：
 
-- Type 3 XOR 加密
-- Unicode UTF-16 code unit 加密
+- Type 1 / Type 2 / Type 3 协议参数
+- Type 3 XOR 与 Unicode UTF-16 code unit 加密
 - JSONP 解析
-- Type 1 / Type 2 请求参数
-- 重复 `lang`
-- 虚拟接口排除
-- Fake-IP 排除
+- 虚拟接口与 Fake-IP 排除
 - route `dev/src` 解析
-- 单网口无 default route
-- 双网口 Portal 路由选择
-- 双网口 default route 缺失 fallback
-- 多地址接口的路由源 IPv4
-- HTTP 5xx 瞬时重试
+- 单网口 / 双网口 / 多地址接口选择
+- default route 缺失 fallback
+- HTTP 5xx 有限重试
 - Portal DNS 失败固定地址回退
-- 固定地址 `.2 -> .10` 顺序回退
+- 固定地址顺序回退
 - 非 BJUT 域名禁止固定解析
-- 非瞬时 4xx 不回退
-- `%` 密码
-- 显式缺失配置
-- 未知配置字段
-- 错误布尔值
-- connectivity URL 校验
-- 示例凭据检测
-- `doctor` Portal 失败退出码
-- `doctor` 配置凭据不会被临时环境变量掩盖
-- systemd timer 使用 `OnActiveSec + OnUnitInactiveSec`，并禁止回归到 `OnUnitActiveSec` / `Persistent=true`
+- 非瞬时 HTTP 4xx 不回退
+- 配置与凭据校验
+- 公网健康检查与固定 IP 解析
+- Portal 异常但公网已经恢复时的最终状态确认
+- systemd timer 调度规则
+- NetworkManager dispatcher 与事件防抖 timer
 
-GitHub Actions 会在多个 Python 版本上执行测试。
+GitHub Actions 会在多个 Python 版本上自动执行测试。
 
 ---
 
-# 19. 许可与第三方说明
+## 19. 致谢与许可
 
-项目致谢和主要参考来源已置于 README 最前方。
+本项目的 Portal 协议实现和兼容策略参考了以下开源项目：
 
-`key-zhzr/BJUT-Auto-Login` 采用 MIT License；其相关许可与归属声明保留在：
+- [key-zhzr/BJUT-Auto-Login](https://github.com/key-zhzr/BJUT-Auto-Login) — 当前 BJUT Portal 协议、Type 3 加密流程及兼容策略的重要参考，采用 MIT License。
+- [sw1128/bjut_auth_linux](https://github.com/sw1128/bjut_auth_linux) — 较早的 BJUT Linux 校园网认证实现，为 Linux 无界面认证流程提供参考。
 
-```text
-THIRD_PARTY_NOTICES
-```
+本项目不是上述项目的官方版本或附属项目。第三方归属与许可说明见 [`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES)。
 
-`sw1128/bjut_auth_linux` 作为早期 BJUT Linux 认证实现参考。本项目未将其声明为代码来源或许可来源。
-
-本项目同样采用 MIT License，具体以仓库中的 `LICENSE` 为准。
+本项目采用 MIT License，具体以仓库中的 [`LICENSE`](./LICENSE) 为准。
