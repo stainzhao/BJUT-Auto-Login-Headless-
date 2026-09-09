@@ -5,10 +5,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReloginSystemdTests(unittest.TestCase):
-    def test_periodic_ensure_uses_same_lock_as_relogin(self):
+    def test_periodic_ensure_uses_same_writable_lock_as_relogin(self):
         text = (ROOT / "systemd" / "bjut-auto-login.service").read_text()
         self.assertIn("/run/lock/bjut-auto-login.lock", text)
         self.assertIn("/usr/bin/flock", text)
+        self.assertIn("ProtectSystem=strict", text)
+        self.assertIn("ReadWritePaths=/run/lock", text)
+
+    def test_relogin_service_allows_lock_write_and_has_extended_timeout(self):
+        service = (ROOT / "systemd" / "bjut-auto-relogin.service").read_text()
+        self.assertIn("ProtectSystem=strict", service)
+        self.assertIn("ReadWritePaths=/run/lock", service)
+        self.assertIn("TimeoutStartSec=240s", service)
 
     def test_relogin_timer_is_installed_but_not_enabled_by_script(self):
         timer = (ROOT / "systemd" / "bjut-auto-relogin.timer").read_text()
