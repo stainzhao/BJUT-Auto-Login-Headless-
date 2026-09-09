@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/bjut-relogin --config /etc/bjut-auto-login.conf relogin
-TimeoutStartSec=120s
+TimeoutStartSec=240s
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
