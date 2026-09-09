@@ -1,6 +1,6 @@
 # 定时注销与重新认证
 
-该功能作为现有 `ensure` 自动重连的补充：`ensure` 只在公网离线时认证，`relogin` 会主动注销当前 Portal 会话，再重新认证。
+该功能作为现有 `ensure` 自动重连的补充：`ensure` 只在公网离线时认证；`relogin` 在当前在线时执行“注销 → 等待 → 重新认证”，如果触发时已经离线，则跳过注销并直接尝试恢复登录。
 
 ## 手动触发
 
@@ -53,7 +53,7 @@ sudo systemctl restart bjut-auto-relogin.timer
 
 ## 并发保护
 
-`relogin` 使用 `/run/lock/bjut-auto-login.lock`。现有 `bjut-auto-login.service` 也通过同一个 `flock` 锁运行，因此在“注销 → 等待 → 登录”期间，60 秒 `ensure` 不会抢先发起认证。
+`relogin` 使用 `/run/lock/bjut-auto-login.lock`。现有 `bjut-auto-login.service` 也通过同一个 `flock` 锁运行，并在 `ProtectSystem=strict` 下显式允许写入 `/run/lock`，因此在“注销 → 等待 → 登录”期间，60 秒 `ensure` 不会抢先发起认证。
 
 ## 退出码
 
