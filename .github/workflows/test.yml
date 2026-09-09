@@ -18,7 +18,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Python syntax
-        run: python -m py_compile bjut_auth.py
+        run: python -m py_compile bjut_auth.py bjut_relogin.py
 
       - name: Unit tests
         run: python -m unittest discover -s tests -v
@@ -44,11 +44,14 @@ jobs:
       - name: Verify installed files
         run: |
           /usr/local/bin/bjut-auth --version
+          /usr/local/bin/bjut-relogin --version
           test "$(stat -c '%a' /usr/local/bin/bjut-auth)" = "755"
+          test "$(stat -c '%a' /usr/local/bin/bjut-relogin)" = "755"
           test "$(stat -c '%a' /etc/bjut-auto-login.conf)" = "600"
 
       - name: Uninstall
         run: |
           sudo ./uninstall.sh --purge
           test ! -e /usr/local/bin/bjut-auth
+          test ! -e /usr/local/bin/bjut-relogin
           test ! -e /etc/bjut-auto-login.conf
