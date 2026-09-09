@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/bjut-auth --config /etc/bjut-auto-login.conf ensure
-TimeoutStartSec=60s
+ExecStart=/usr/bin/flock --exclusive --wait 55 --conflict-exit-code 0 /run/lock/bjut-auto-login.lock /usr/local/bin/bjut-auth --config /etc/bjut-auto-login.conf ensure
+TimeoutStartSec=120s
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
