@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlencode
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 LOCK_PATH = Path("/run/lock/bjut-auto-login.lock")
 DEFAULT_RELOGIN_DELAY = 2.0
 DEFAULT_LOCK_TIMEOUT = 60.0
@@ -216,31 +216,9 @@ def wait_until_offline(core, interface, check_url, resolve_ip, attempts=6, delay
     return False
 
 
-def do_relogin(core, args, config):
-    issue = core.credential_issue(args, config)
-    if issue:
-        raise ReloginError(f"{issue}；relogin 会先注销，因此已在注销前终止")
-
-    interface, login_type, allow_http = resolve_context(core, args, config)
-    check_url = core.connectivity_url(config)
-    check_resolve_ip = core.connectivity_resolve_ip(config)
-
-    ok, _, _, _ = do_logout(
-        core, args, config, interface, login_type, allow_http
-    )
-    if not ok:
-        return 2
-
-    if not wait_until_offline(
-        core, interface, check_url, check_resolve_ip
-    ):
-        print(
-            "error: Portal 返回注销成功，但公网仍在线；为避免重复认证，已停止 relogin",
-            file=sys.stderr,
-        )
-        return 3
-
-    time.sleep(max(0.0, args.delay))
+def login_and_confirm(
+    core, args, config, interface, login_type, check_url, check_resolve_ip
+):
     login_args = argparse.Namespace(**vars(args))
     login_args.login_type = login_type
     if not core.do_login(login_args, config, interface):
@@ -250,6 +228,48 @@ def do_relogin(core, args, config):
         return 0
     print("error: 重新认证后公网仍为 offline", file=sys.stderr)
     return 3
+
+
+def do_relogin(core, args, config):
+    issue = core.credential_issue(args, config)
+    if issue:
+        raise ReloginError(f"{issue}；relogin 可能执行注销，因此已在操作前终止")
+
+    interface, login_type, allow_http = resolve_context(core, args, config)
+    check_url = core.connectivity_url(config)
+    check_resolve_ip = core.connectivity_resolve_ip(config)
+
+    if core.internet_online(interface, check_url, check_resolve_ip):
+        ok, _, _, _ = do_logout(
+            core, args, config, interface, login_type, allow_http
+        )
+        if not ok:
+            return 2
+
+        if not wait_until_offline(
+            core, interface, check_url, check_resolve_ip
+        ):
+            print(
+                "error: Portal 返回注销成功，但公网仍在线；为避免重复认证，已停止 relogin",
+                file=sys.stderr,
+            )
+            return 3
+
+        time.sleep(max(0.0, args.delay))
+    else:
+        print(
+            f"offline: interface={interface}, skip logout and attempt login"
+        )
+
+    return login_and_confirm(
+        core,
+        args,
+        config,
+        interface,
+        login_type,
+        check_url,
+        check_resolve_ip,
+    )
 
 
 def build_parser():
@@ -265,7 +285,7 @@ def build_parser():
     parser.add_argument("--allow-http-fallback", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("logout", help="手动注销当前校园网 Portal 会话")
-    relogin = sub.add_parser("relogin", help="注销后等待并重新认证")
+    relogin = sub.add_parser("relogin", help="注销后等待并重新认证；若已离线则直接认证")
     relogin.add_argument(
         "--delay", type=float, default=DEFAULT_RELOGIN_DELAY,
         help=f"确认离线后等待秒数（默认 {DEFAULT_RELOGIN_DELAY:g} 秒）",
