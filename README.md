@@ -18,6 +18,50 @@
 - 支持定时重新认证（可选）
 - 配置文件权限保护
 
+## 登录 / 注销 / 重新认证技术路线图
+
+```text
+                         网络事件 / 定时检查
+                                  │
+                                  ▼
+                         bjut-auth ensure
+                                  │
+                 ┌────────────────┴────────────────┐
+                 │                                 │
+                 ▼                                 ▼
+              公网在线                         公网离线
+                 │                                 │
+                 │                         判断 Portal 类型
+                 │                                 │
+                 │                         执行登录认证
+                 │                                 │
+                 └──────────────┐          公网确认
+                                │                │
+                                ▼                ▼
+                              完成 ◄─────────────┘
+
+
+                 bjut-relogin / bjut-auto-relogin.timer
+                                  │
+                                  ▼
+                               互斥锁
+                                  │
+                                  ▼
+                              logout
+                                  │
+                                  ▼
+                         等待认证状态释放
+                                  │
+                                  ▼
+                              login
+                                  │
+                                  ▼
+                            公网确认
+                                  │
+                                  ▼
+                              完成
+```
+
 ## 安装
 
 ```bash
@@ -42,8 +86,6 @@ sudo ./install.sh --no-systemd
 
 ## 配置
 
-编辑：
-
 ```bash
 sudo nano /etc/bjut-auto-login.conf
 ```
@@ -67,21 +109,9 @@ sudo chmod 600 /etc/bjut-auto-login.conf
 
 ## 首次测试
 
-检查环境：
-
 ```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
-```
-
-测试认证：
-
-```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf ensure
-```
-
-查看状态：
-
-```bash
 sudo bjut-auth --config /etc/bjut-auto-login.conf status
 ```
 
@@ -113,7 +143,7 @@ sudo bjut-relogin --config /etc/bjut-auto-login.conf logout
 sudo bjut-relogin --config /etc/bjut-auto-login.conf relogin
 ```
 
-也可以通过 systemd：
+systemd 手动触发：
 
 ```bash
 sudo systemctl start bjut-auto-relogin.service
@@ -129,15 +159,15 @@ sudo systemctl start bjut-auto-relogin.service
 sudo systemctl enable --now bjut-auto-relogin.timer
 ```
 
-默认每天 04:00 执行，用于刷新校园网认证会话。
+默认每天 04:00 执行。
 
-修改执行时间：
+修改时间：
 
 ```bash
 sudo systemctl edit bjut-auto-relogin.timer
 ```
 
-例如修改为每天 03:30：
+例如每天 03:30：
 
 ```ini
 [Timer]
@@ -146,7 +176,7 @@ OnCalendar=*-*-* 03:30:00
 RandomizedDelaySec=5min
 ```
 
-应用配置：
+应用：
 
 ```bash
 sudo systemctl daemon-reload
@@ -159,15 +189,7 @@ sudo systemctl restart bjut-auto-relogin.timer
 sudo systemctl disable --now bjut-auto-relogin.timer
 ```
 
-查看状态：
-
-```bash
-systemctl status bjut-auto-relogin.timer
-```
-
 ## 更新已有安装
-
-更新代码：
 
 ```bash
 git pull
@@ -176,13 +198,6 @@ sudo systemctl daemon-reload
 ```
 
 已有 `/etc/bjut-auto-login.conf` 不会覆盖。
-
-更新后建议测试：
-
-```bash
-sudo bjut-auth --config /etc/bjut-auto-login.conf doctor
-sudo bjut-relogin --config /etc/bjut-auto-login.conf relogin
-```
 
 ## 常用命令
 
@@ -193,16 +208,14 @@ sudo bjut-relogin --config /etc/bjut-auto-login.conf relogin
 |查看状态|`bjut-auth status`|
 |注销|`bjut-relogin logout`|
 |重新认证|`bjut-relogin relogin`|
-|查看自动恢复日志|`journalctl -u bjut-auto-login.service`|
-|查看重新认证日志|`journalctl -u bjut-auto-relogin.service`|
 
 ## 致谢与许可
 
-本项目的 Portal 协议实现和兼容策略参考了以下开源项目：
+本项目的 Portal 协议实现和兼容策略参考：
 
 - https://github.com/WuSiYu/BJUT-Auto-Login
 - https://github.com/key-zhzr/BJUT-Auto-Login
 
-感谢相关开源项目作者对北京工业大学校园网认证协议研究与实现提供的参考。
+感谢相关开源项目作者提供的协议研究与实现参考。
 
 本项目仅用于个人学习与科研环境中的校园网自动认证，不包含任何账号信息，也不提供绕过认证或违规访问网络的功能。
