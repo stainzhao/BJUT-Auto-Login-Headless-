@@ -160,3 +160,14 @@ sudo bjut-relogin --config /etc/bjut-auto-login.conf relogin
 |重新认证|`bjut-relogin relogin`|
 |查看自动恢复日志|`journalctl -u bjut-auto-login.service`|
 |查看重新认证日志|`journalctl -u bjut-auto-relogin.service`|
+
+## 致谢与许可
+
+本项目的 Portal 协议实现和兼容策略参考了以下开源项目：
+
+- https://github.com/WuSiYu/BJUT-Auto-Login
+- https://github.com/key-zhzr/BJUT-Auto-Login
+
+感谢相关开源项目作者对北京工业大学校园网认证协议研究与实现提供的参考。
+
+本项目仅用于个人学习与科研环境中的校园网自动认证，不包含任何账号信息，也不提供绕过认证或违规访问网络的功能。
