@@ -15,6 +15,7 @@
 - 支持断线自动恢复
 - systemd timer + NetworkManager 事件触发
 - 支持手动注销与重新认证（relogin）
+- 支持定时重新认证（可选）
 - 配置文件权限保护
 
 ## 安装
@@ -129,6 +130,18 @@ sudo systemctl enable --now bjut-auto-relogin.timer
 ```
 
 默认每天 04:00 执行，用于刷新校园网认证会话。
+
+关闭：
+
+```bash
+sudo systemctl disable --now bjut-auto-relogin.timer
+```
+
+查看状态：
+
+```bash
+systemctl status bjut-auto-relogin.timer
+```
 
 ## 更新已有安装
 
