@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodically force BJUT campus network relogin
+
+[Timer]
+# Installed but intentionally not enabled by install.sh.
+# Override OnCalendar with `systemctl edit bjut-auto-relogin.timer` if needed.
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=5min
+Unit=bjut-auto-relogin.service
+
+[Install]
+WantedBy=timers.target
