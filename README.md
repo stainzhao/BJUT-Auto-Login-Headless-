@@ -131,6 +131,28 @@ sudo systemctl enable --now bjut-auto-relogin.timer
 
 默认每天 04:00 执行，用于刷新校园网认证会话。
 
+修改执行时间：
+
+```bash
+sudo systemctl edit bjut-auto-relogin.timer
+```
+
+例如修改为每天 03:30：
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=5min
+```
+
+应用配置：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart bjut-auto-relogin.timer
+```
+
 关闭：
 
 ```bash
