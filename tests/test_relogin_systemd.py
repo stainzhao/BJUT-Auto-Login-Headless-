@@ -12,6 +12,14 @@ class ReloginSystemdTests(unittest.TestCase):
         self.assertIn("ProtectSystem=strict", text)
         self.assertIn("ReadWritePaths=/run/lock", text)
 
+    def test_ipv6_watch_runs_after_ensure_and_timeout_covers_recovery(self):
+        service = (ROOT / "systemd" / "bjut-auto-login.service").read_text()
+        self.assertIn(
+            "ExecStartPost=/usr/local/bin/bjut-ipv6-watch --config /etc/bjut-auto-login.conf",
+            service,
+        )
+        self.assertIn("TimeoutStartSec=300s", service)
+
     def test_relogin_service_allows_lock_write_and_has_extended_timeout(self):
         service = (ROOT / "systemd" / "bjut-auto-relogin.service").read_text()
         self.assertIn("ProtectSystem=strict", service)
