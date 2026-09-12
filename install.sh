@@ -103,7 +103,7 @@ echo "  sudo bjut-relogin --config /etc/bjut-auto-login.conf relogin"
 echo "  sudo bjut-ipv6-watch --config /etc/bjut-auto-login.conf"
 if (( WITH_SYSTEMD )); then
   echo "  sudo systemctl enable --now bjut-auto-login.timer"
-  echo "  Type 3 IPv6 健康监控：随 bjut-auto-login.service 周期检查"
+  echo "  Type 3 IPv6 自动恢复：已安装，默认关闭；在 [IPv6Watch] 中设置 enabled = true 开启"
   echo "  定时强制重新认证：已安装但未自动启用"
   echo "  手动触发：sudo systemctl start bjut-auto-relogin.service"
   echo "  如需启用定时器：sudo systemctl enable --now bjut-auto-relogin.timer"
