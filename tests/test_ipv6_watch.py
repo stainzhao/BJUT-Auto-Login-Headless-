@@ -23,27 +23,47 @@ class IPv6WatchTests(unittest.TestCase):
             ["2001:da8:216:191a::1234"],
         )
 
-    def test_watch_config_defaults_enabled(self):
+    def test_watch_config_defaults_disabled(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "config.ini"
             path.write_text("[BJUT]\nusername=x\npassword=y\n", encoding="utf-8")
             cfg = mod.load_watch_config(path)
-            self.assertTrue(cfg["enabled"])
+            self.assertFalse(cfg["enabled"])
             self.assertEqual(cfg["failures"], 2)
             self.assertEqual(cfg["cooldown_seconds"], 300)
 
-    def test_watch_config_can_disable(self):
+    def test_watch_config_can_enable(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "config.ini"
             path.write_text(
                 "[BJUT]\nusername=x\npassword=y\n\n"
-                "[IPv6Watch]\nenabled=false\nfailures=3\ncooldown_seconds=60\n",
+                "[IPv6Watch]\nenabled=true\nfailures=3\ncooldown_seconds=60\n",
                 encoding="utf-8",
             )
             cfg = mod.load_watch_config(path)
-            self.assertFalse(cfg["enabled"])
+            self.assertTrue(cfg["enabled"])
             self.assertEqual(cfg["failures"], 3)
             self.assertEqual(cfg["cooldown_seconds"], 60)
+
+    def test_disabled_watch_does_not_probe_or_relogin(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = Path(td) / "state.json"
+            core = types.SimpleNamespace()
+            with mock.patch.object(mod, "ipv6_health") as health, mock.patch.object(
+                mod.subprocess, "run"
+            ) as runner:
+                self.assertEqual(
+                    mod.run_watch(
+                        core,
+                        {},
+                        None,
+                        {"enabled": False, "failures": 2, "cooldown_seconds": 300},
+                        state_path=state,
+                    ),
+                    0,
+                )
+                health.assert_not_called()
+                runner.assert_not_called()
 
     def test_ipv6_health_requires_local_portal_match(self):
         core = types.SimpleNamespace(
