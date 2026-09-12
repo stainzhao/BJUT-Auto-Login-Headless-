@@ -43,7 +43,7 @@ if (( WITH_SYSTEMD )); then
   fi
 fi
 
-python3 - "$SCRIPT_DIR/bjut_auth.py" "$SCRIPT_DIR/bjut_relogin.py" <<'PY'
+python3 - "$SCRIPT_DIR/bjut_auth.py" "$SCRIPT_DIR/bjut_relogin.py" "$SCRIPT_DIR/bjut_ipv6_watch.py" <<'PY'
 from pathlib import Path
 import sys
 
@@ -58,6 +58,7 @@ PY
 
 install -m 0755 "$SCRIPT_DIR/bjut_auth.py" /usr/local/bin/bjut-auth
 install -m 0755 "$SCRIPT_DIR/bjut_relogin.py" /usr/local/bin/bjut-relogin
+install -m 0755 "$SCRIPT_DIR/bjut_ipv6_watch.py" /usr/local/bin/bjut-ipv6-watch
 
 if [[ ! -e /etc/bjut-auto-login.conf ]]; then
   install -m 0600 "$SCRIPT_DIR/config.example.ini" /etc/bjut-auto-login.conf
@@ -99,8 +100,10 @@ echo "  sudo nano /etc/bjut-auto-login.conf"
 echo "  sudo bjut-auth --config /etc/bjut-auto-login.conf doctor"
 echo "  sudo bjut-auth --config /etc/bjut-auto-login.conf ensure"
 echo "  sudo bjut-relogin --config /etc/bjut-auto-login.conf relogin"
+echo "  sudo bjut-ipv6-watch --config /etc/bjut-auto-login.conf"
 if (( WITH_SYSTEMD )); then
   echo "  sudo systemctl enable --now bjut-auto-login.timer"
+  echo "  Type 3 IPv6 健康监控：随 bjut-auto-login.service 周期检查"
   echo "  定时强制重新认证：已安装但未自动启用"
   echo "  手动触发：sudo systemctl start bjut-auto-relogin.service"
   echo "  如需启用定时器：sudo systemctl enable --now bjut-auto-relogin.timer"
