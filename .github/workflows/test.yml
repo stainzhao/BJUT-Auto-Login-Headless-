@@ -18,7 +18,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Python syntax
-        run: python -m py_compile bjut_auth.py bjut_relogin.py
+        run: python -m py_compile bjut_auth.py bjut_relogin.py bjut_ipv6_watch.py
 
       - name: Unit tests
         run: python -m unittest discover -s tests -v
@@ -32,6 +32,7 @@ jobs:
           grep -q '^OnActiveSec=2s$' systemd/bjut-auto-login-event.timer
           grep -q '^RemainAfterElapse=no$' systemd/bjut-auto-login-event.timer
           grep -q 'restart --no-block bjut-auto-login-event.timer' NetworkManager/dispatcher.d/90-bjut-auto-login
+          grep -q '^ExecStartPost=/usr/local/bin/bjut-ipv6-watch --config /etc/bjut-auto-login.conf$' systemd/bjut-auto-login.service
 
   install-smoke:
     runs-on: ubuntu-latest
@@ -45,8 +46,10 @@ jobs:
         run: |
           /usr/local/bin/bjut-auth --version
           /usr/local/bin/bjut-relogin --version
+          /usr/local/bin/bjut-ipv6-watch --version
           test "$(stat -c '%a' /usr/local/bin/bjut-auth)" = "755"
           test "$(stat -c '%a' /usr/local/bin/bjut-relogin)" = "755"
+          test "$(stat -c '%a' /usr/local/bin/bjut-ipv6-watch)" = "755"
           test "$(stat -c '%a' /etc/bjut-auto-login.conf)" = "600"
 
       - name: Uninstall
@@ -54,4 +57,5 @@ jobs:
           sudo ./uninstall.sh --purge
           test ! -e /usr/local/bin/bjut-auth
           test ! -e /usr/local/bin/bjut-relogin
+          test ! -e /usr/local/bin/bjut-ipv6-watch
           test ! -e /etc/bjut-auto-login.conf
