@@ -60,7 +60,7 @@ def load_core():
     )
 
 
-def parse_bool(value, default=True):
+def parse_bool(value, default=False):
     if value is None or not str(value).strip():
         return default
     normalized = str(value).strip().lower()
@@ -85,7 +85,7 @@ def parse_int(value, default, minimum, maximum, label):
 
 def load_watch_config(path):
     settings = {
-        "enabled": True,
+        "enabled": False,
         "failures": DEFAULT_FAILURE_THRESHOLD,
         "cooldown_seconds": DEFAULT_COOLDOWN_SECONDS,
     }
@@ -105,7 +105,7 @@ def load_watch_config(path):
     unknown = sorted(set(section) - {"enabled", "failures", "cooldown_seconds"})
     if unknown:
         raise WatchError(f"IPv6Watch 包含未知字段：{', '.join(unknown)}")
-    settings["enabled"] = parse_bool(section.get("enabled"), True)
+    settings["enabled"] = parse_bool(section.get("enabled"), False)
     settings["failures"] = parse_int(
         section.get("failures"), DEFAULT_FAILURE_THRESHOLD, 1, 10,
         "IPv6Watch.failures",
@@ -233,6 +233,7 @@ def relogin_command(config_path):
 def run_watch(core, config, config_path, watch_config, state_path=STATE_PATH, now=None):
     if not watch_config["enabled"]:
         save_state({"failures": 0, "last_attempt": 0.0}, state_path)
+        print("ipv6-watch: disabled")
         return 0
 
     allow_http = core.cfg_bool(config, "allow_http_fallback", False)
