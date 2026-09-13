@@ -40,6 +40,8 @@ rm -f /etc/NetworkManager/dispatcher.d/90-bjut-auto-login
 rm -f /etc/systemd/system/bjut-auto-login.service
 rm -f /usr/local/bin/bjut-auth
 rm -f /usr/local/bin/bjut-relogin
+rm -f /usr/local/bin/bjut-ipv6-watch
+rm -f /run/lock/bjut-auto-login-ipv6-watch.json
 
 if (( HAS_SYSTEMD )); then
   systemctl daemon-reload
